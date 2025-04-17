@@ -15,28 +15,34 @@
 ### 系統架構圖
 
 ```
-+------------------------+    +-----------------+
-| RLMeshDeviceController |<-->| DeviceManager  |
-+------------------------+    +-----------------+
-         |     |                      |
-         |     v                      v
-         |  +----------+      +---------------+
-         +->| ModbusRTU|      | JSON 設備記錄 |
-         |  +----------+      +---------------+
-         v
-    +-------------+
-    | Provisioner |
-    +-------------+
-         |
-         v
-     +----------+
-     | SerialAT |
-     +----------+
-         |
-         v
- +-----------------+
- | 實體串口 (COM埠) |
- +-----------------+
++--------------------------------------------------+    +----------------+
+| RLMeshDeviceController                           |<-->| DeviceManager  |
+|                                                  |    +----------------+
+| - RGB LED 控制                                   |            |
+| - 插座控制                                       |            v
+| - Smart-Box RTU 控制                             |    +----------------+
+| - Air-Box 環境監測 (溫度、濕度、PM2.5、CO2)      |    | JSON 設備記錄   |
+| - 電錶監測 (電壓、電流、功率)                    |    +----------------+
++--------------------------------------------------+
+           |                |
+           |                v
+           |          +----------+
+           +--------->| ModbusRTU|
+           |          +----------+
+           v
+      +-------------+
+      | Provisioner |
+      +-------------+
+           |
+           v
+       +----------+
+       | SerialAT |
+       +----------+
+           |
+           v
+   +-----------------+
+   | 實體串口 (COM埠) |
+   +-----------------+
 ```
 
 ## 2. 類別關係
@@ -199,9 +205,62 @@ controller.write_smart_box_registers(unicast_addr, 1, 200, [1111, 2222, 3333])
 controller.write_smart_box_coil(unicast_addr, 1, 0, True)
 ```
 
-### 4.6 錯誤處理
+### 4.6 Air-Box 環境監測設備控制
 
-所有的控制命令都會返回執行結果，建議在實際應用中加入適當的錯誤處理：
+```python
+# 假設 unicast_addr 已經通過配網獲取
+unicast_addr = "0x0400"
+
+# 註冊 Air-Box 設備
+controller.register_device(unicast_addr, RLMeshDeviceController.DEVICE_TYPE_AIR_BOX, "會議室空氣監測器")
+
+# 讀取環境數據
+result = controller.read_air_box_data(unicast_addr, 1)  # 1 是從站地址
+
+# 顯示環境數據
+print(f"溫度: {result['temperature']}°C")
+print(f"濕度: {result['humidity']}%")
+print(f"PM2.5: {result['pm25']} μg/m³")
+print(f"CO2: {result['co2']} ppm")
+
+# 連續監測模式
+try:
+    while True:
+        result = controller.read_air_box_data(unicast_addr, 1)
+        print(f"溫度: {result['temperature']:5.1f}°C | 濕度: {result['humidity']:5.1f}% | PM2.5: {result['pm25']:3d} μg/m³ | CO2: {result['co2']:4d} ppm")
+        time.sleep(3)  # 每3秒更新一次
+except KeyboardInterrupt:
+    print("監測已停止")
+```
+
+### 4.7 電錶設備控制
+
+```python
+# 假設 unicast_addr 已經通過配網獲取
+unicast_addr = "0x0500"
+
+# 註冊電錶設備
+controller.register_device(unicast_addr, RLMeshDeviceController.DEVICE_TYPE_POWER_METER, "主線路電錶")
+
+# 讀取電力數據
+result = controller.read_power_meter_data(unicast_addr, 1)  # 1 是從站地址
+
+# 顯示電力數據
+print(f"電壓: {result['voltage']} V")
+print(f"電流: {result['current']} A")
+print(f"功率: {result['power']} W")
+
+# 連續監測模式
+try:
+    while True:
+        result = controller.read_power_meter_data(unicast_addr, 1)
+        print(f"電壓: {result['voltage']:6.1f} V | 電流: {result['current']:5.3f} A | 功率: {result['power']:5.1f} W")
+        time.sleep(1)  # 每1秒更新一次
+except KeyboardInterrupt:
+    print("監測已停止")
+```
+
+### 4.8 錯誤處理
 
 ```python
 try:

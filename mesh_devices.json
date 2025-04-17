@@ -1,0 +1,14 @@
+{
+  "devices": [
+    {
+      "uuid": "123E4567E89B12D3A45670FFF001000E",
+      "mac_address": "70FFF001000E",
+      "unicast_addr": "0x0101",
+      "name": "POWER1",
+      "type": "POWER_METER",
+      "group": null,
+      "linked_devices": []
+    }
+  ],
+  "groups": {}
+}

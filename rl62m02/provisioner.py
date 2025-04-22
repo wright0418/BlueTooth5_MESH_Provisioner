@@ -1,6 +1,7 @@
 import threading
 import time
 import logging
+import uuid as uuid_module
 from .serial_at import SerialAT
 
 class Provisioner:
@@ -28,33 +29,104 @@ class Provisioner:
         self.serial_at = serial_at
         self.last_response = None
         self.responses = []
+        self._resp_lock = threading.Lock()  # 添加鎖保護共享資源
+        self._response_events = {}  # 用於單獨命令的響應事件
         self.serial_at.on_receive = self._on_receive
         self._response_event = threading.Event()
+        self._command_prefixes = {
+            'AT+VER': 'VER-MSG',
+            'AT+NAME': 'NAME-MSG',
+            'AT+REBOOT': 'REBOOT-MSG',
+            'AT+MRG': 'MRG-MSG',
+            'AT+DIS': 'DIS-MSG',
+            'AT+PBADVCON': 'PBADVCON-MSG',
+            'AT+PROV': 'PROV-MSG',
+            'AT+NL': 'NL-MSG',
+            'AT+AKA': 'AKA-MSG',
+            'AT+MAKB': 'MAKB-MSG',
+            'AT+MSAA': 'MSAA-MSG',
+            'AT+MPAS': 'MPAS-MSG',
+            'AT+MDTS': 'MDTS-MSG',
+            'AT+MDTG': 'MDTG-MSG',
+            'AT+NR': 'NR-MSG'
+        }
+        self._last_command_id = None  # 最後發送命令的ID
 
     def _on_receive(self, line: str):
-        """接收消息的回調函數"""
-        self.responses.append(line)
-        self.last_response = line
-        self._response_event.set()
+        """接收消息的回調函數，添加鎖保護並支援命令ID匹配"""
+        with self._resp_lock:
+            self.responses.append(line)
+            self.last_response = line
 
-    def _send_and_wait(self, cmd: str, timeout: float = None):
+            # 檢查是否有待處理的命令回應
+            if self._last_command_id and self._last_command_id in self._response_events:
+                cmd_prefix = self._response_events[self._last_command_id]['prefix']
+                if line.startswith(cmd_prefix):
+                    self._response_events[self._last_command_id]['response'] = line
+                    self._response_events[self._last_command_id]['event'].set()
+                    self._last_command_id = None  # 清除已處理的命令ID
+            
+            # 通知一般響應等待
+            self._response_event.set()
+
+    def _send_and_wait(self, cmd: str, timeout: float = None, expected_prefix: str = None):
         """
-        發送命令並等待響應
+        發送命令並等待特定前綴的響應，使用命令ID進行配對
         
         Args:
             cmd (str): 要發送的 AT 命令
             timeout (float): 超時時間，單位為秒
+            expected_prefix (str): 預期的響應前綴，如果為None則根據命令自動判斷
             
         Returns:
             str: 響應消息，如果超時則返回 None
         """
         if timeout is None:
             timeout = self.DEFAULT_TIMEOUT
-        self._response_event.clear()
-        self.serial_at.send(cmd)
-        if self._response_event.wait(timeout):
-            return self.last_response
-        return None
+            
+        # 生成唯一的命令ID
+        cmd_id = str(uuid_module.uuid4())
+        self._last_command_id = cmd_id
+        
+        # 決定預期的回應前綴
+        if expected_prefix is None:
+            # 從命令中提取前綴部分
+            cmd_base = cmd.split(' ')[0] if ' ' in cmd else cmd
+            expected_prefix = self._command_prefixes.get(cmd_base)
+        
+        if expected_prefix:
+            # 使用命令ID機制等待特定回應
+            event = threading.Event()
+            with self._resp_lock:
+                self._response_events[cmd_id] = {
+                    'event': event, 
+                    'prefix': expected_prefix,
+                    'response': None
+                }
+            
+            # 發送命令
+            self.serial_at.send(cmd)
+            
+            # 等待指定的響應或超時
+            if event.wait(timeout):
+                with self._resp_lock:
+                    response = self._response_events[cmd_id]['response']
+                    self._response_events.pop(cmd_id, None)  # 移除已處理的命令
+                return response
+            else:
+                # 超時，清理
+                with self._resp_lock:
+                    self._response_events.pop(cmd_id, None)
+                return None
+        else:
+            # 對於無法識別前綴的命令，使用舊方法
+            with self._resp_lock:
+                self._response_event.clear()
+            self.serial_at.send(cmd)
+            if self._response_event.wait(timeout):
+                with self._resp_lock:
+                    return self.last_response
+            return None
 
     def get_version(self):
         """
@@ -63,10 +135,8 @@ class Provisioner:
         Returns:
             str: 版本信息
         """
-        resp = self._send_and_wait('AT+VER')
-        if resp and resp.startswith('VER-MSG'):
-            return resp
-        return None
+        resp = self._send_and_wait('AT+VER', expected_prefix='VER-MSG')
+        return resp
 
     def set_name(self, name: str):
         """
@@ -78,7 +148,7 @@ class Provisioner:
         Returns:
             str: 響應消息
         """
-        resp = self._send_and_wait(f'AT+NAME {name}')
+        resp = self._send_and_wait(f'AT+NAME {name}', expected_prefix='NAME-MSG')
         return resp
 
     def reboot(self):
@@ -88,7 +158,7 @@ class Provisioner:
         Returns:
             str: 響應消息
         """
-        resp = self._send_and_wait('AT+REBOOT')
+        resp = self._send_and_wait('AT+REBOOT', expected_prefix='REBOOT-MSG')
         return resp
 
     def get_role(self):
@@ -98,7 +168,7 @@ class Provisioner:
         Returns:
             str: 角色信息
         """
-        resp = self._send_and_wait('AT+MRG')
+        resp = self._send_and_wait('AT+MRG', expected_prefix='MRG-MSG')
         return resp
 
     def scan_nodes(self, enable: bool = True, scan_time: float = 3.0):
@@ -139,9 +209,9 @@ class Provisioner:
         Returns:
             str: 響應消息
         """
-        resp = self._send_and_wait(f'AT+PBADVCON {dev_uuid}')
+        resp = self._send_and_wait(f'AT+PBADVCON {dev_uuid}', expected_prefix='PBADVCON-MSG')
         if resp and resp.startswith('PBADVCON-MSG SUCCESS'):
-            prov_resp = self._send_and_wait('AT+PROV')
+            prov_resp = self._send_and_wait('AT+PROV', expected_prefix='PROV-MSG')
             return prov_resp
         return resp
 
@@ -169,7 +239,7 @@ class Provisioner:
         Returns:
             str: 響應消息
         """
-        resp = self._send_and_wait(f'AT+AKA {dst} {app_key_index} {net_key_index}')
+        resp = self._send_and_wait(f'AT+AKA {dst} {app_key_index} {net_key_index}', expected_prefix='AKA-MSG')
         return resp
 
     def auto_provision_node(self, uuid: str):
@@ -184,12 +254,12 @@ class Provisioner:
         """
         unicast_addr = None
         # 1. 開啟 PB-ADV 通道
-        resp = self._send_and_wait(f'AT+PBADVCON {uuid}', timeout=self.AKA_TIMEOUT)
+        resp = self._send_and_wait(f'AT+PBADVCON {uuid}', timeout=self.AKA_TIMEOUT, expected_prefix='PBADVCON-MSG')
         if not resp or not resp.startswith('PBADVCON-MSG SUCCESS'):
             logging.warning(f'PBADVCON 失敗: {resp}')
             return {'result': 'fail', 'step': 'PBADVCON', 'msg': resp}
         # 2. 執行 Provisioning
-        prov_resp = self._send_and_wait('AT+PROV', timeout=self.PROV_TIMEOUT)
+        prov_resp = self._send_and_wait('AT+PROV', timeout=self.PROV_TIMEOUT, expected_prefix='PROV-MSG')
         if not prov_resp or not prov_resp.startswith('PROV-MSG SUCCESS'):
             logging.warning(f'PROV 失敗: {prov_resp}')
             return {'result': 'fail', 'step': 'PROV', 'msg': prov_resp}
@@ -200,17 +270,17 @@ class Provisioner:
             return {'result': 'fail', 'step': 'PROV', 'msg': prov_resp}
         unicast_addr = parts[2]
         # 3. AppKey 綁定
-        aka_resp = self._send_and_wait(f'AT+AKA {unicast_addr} {self.APP_KEY_IDX} {self.NET_KEY_IDX}', timeout=self.AKA_TIMEOUT)
+        aka_resp = self._send_and_wait(f'AT+AKA {unicast_addr} {self.APP_KEY_IDX} {self.NET_KEY_IDX}', timeout=self.AKA_TIMEOUT, expected_prefix='AKA-MSG')
         if not aka_resp or not aka_resp.startswith('AKA-MSG SUCCESS'):
             if unicast_addr:
-                self._send_and_wait(f'AT+NR {unicast_addr}', timeout=self.NR_TIMEOUT)
+                self._send_and_wait(f'AT+NR {unicast_addr}', timeout=self.NR_TIMEOUT, expected_prefix='NR-MSG')
             logging.warning(f'AKA 綁定失敗: {aka_resp}')
             return {'result': 'fail', 'step': 'AKA', 'msg': aka_resp, 'unicast_addr': unicast_addr, 'nr': 'sent'}
         # 4. Model AppKey 綁定
-        makb_resp = self._send_and_wait(f'AT+MAKB {unicast_addr} {self.APP_KEY_IDX} {self.MODEL_ID} {self.NET_KEY_IDX}', timeout=self.MAKB_TIMEOUT)
+        makb_resp = self._send_and_wait(f'AT+MAKB {unicast_addr} {self.APP_KEY_IDX} {self.MODEL_ID} {self.NET_KEY_IDX}', timeout=self.MAKB_TIMEOUT, expected_prefix='MAKB-MSG')
         if not makb_resp or not makb_resp.startswith('MAKB-MSG SUCCESS'):
             if unicast_addr:
-                self._send_and_wait(f'AT+NR {unicast_addr}', timeout=self.NR_TIMEOUT)
+                self._send_and_wait(f'AT+NR {unicast_addr}', timeout=self.NR_TIMEOUT, expected_prefix='NR-MSG')
             logging.warning(f'MAKB 綁定失敗: {makb_resp}')
             return {'result': 'fail', 'step': 'MAKB', 'msg': makb_resp, 'unicast_addr': unicast_addr, 'nr': 'sent'}
         logging.info(f'自動綁定成功: {unicast_addr}')
@@ -231,7 +301,7 @@ class Provisioner:
         """
         if model_id is None:
             model_id = self.MODEL_ID
-        resp = self._send_and_wait(f'AT+MSAA {unicast_addr} {element_index} {model_id} {group_addr}', timeout=3.0)
+        resp = self._send_and_wait(f'AT+MSAA {unicast_addr} {element_index} {model_id} {group_addr}', timeout=3.0, expected_prefix='MSAA-MSG')
         return resp
 
     def publish_to_target(self, unicast_addr: str, publish_addr: str, element_index: int = 0, model_id: str = None, app_key_idx: int = None):
@@ -252,7 +322,7 @@ class Provisioner:
             model_id = self.MODEL_ID
         if app_key_idx is None:
             app_key_idx = self.APP_KEY_IDX
-        resp = self._send_and_wait(f'AT+MPAS {unicast_addr} {element_index} {model_id} {publish_addr} {app_key_idx}', timeout=3.0)
+        resp = self._send_and_wait(f'AT+MPAS {unicast_addr} {element_index} {model_id} {publish_addr} {app_key_idx}', timeout=3.0, expected_prefix='MPAS-MSG')
         return resp
 
     def send_datatrans(self, unicast_addr: str, data: str, element_index: int = 0, app_key_idx: int = 0, ack: int = 0):
@@ -269,7 +339,7 @@ class Provisioner:
         Returns:
             str: 響應消息
         """
-        resp = self._send_and_wait(f'AT+MDTS {unicast_addr} {element_index} {app_key_idx} {ack} {data}', timeout=3.0)
+        resp = self._send_and_wait(f'AT+MDTS {unicast_addr} {element_index} {app_key_idx} {ack} {data}', timeout=3.0, expected_prefix='MDTS-MSG')
         return resp
 
     def get_datatrans(self, unicast_addr: str, read_data_len: int, element_index: int = 0, app_key_idx: int = 0):
@@ -285,7 +355,7 @@ class Provisioner:
         Returns:
             str: 響應消息
         """
-        resp = self._send_and_wait(f'AT+MDTG {unicast_addr} {element_index} {app_key_idx} {read_data_len}', timeout=3.0)
+        resp = self._send_and_wait(f'AT+MDTG {unicast_addr} {element_index} {app_key_idx} {read_data_len}', timeout=3.0, expected_prefix='MDTG-MSG')
         return resp
 
     def observe(self, print_all: bool = True):

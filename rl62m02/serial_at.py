@@ -30,6 +30,7 @@ class SerialAT:
         self._recv_thread.start()
         self._response_queue = []  # 用於存儲收到的響應
         self._response_event = threading.Event()  # 用於通知有新響應
+        self._queue_lock = threading.Lock()  # 添加互斥鎖保護共享資源
 
     def send(self, cmd: str):
         """
@@ -56,8 +57,9 @@ class SerialAT:
                             line, buffer = buffer.split('\r\n', 1)
                             logging.debug(f"RX: {line}")
                             # 將接收到的行添加到響應隊列
-                            self._response_queue.append(line)
-                            self._response_event.set()  # 通知有新響應
+                            with self._queue_lock:  # 使用互斥鎖保護共享資源
+                                self._response_queue.append(line)
+                                self._response_event.set()  # 通知有新響應
                             if self.on_receive:
                                 self.on_receive(line)
                 else:
@@ -80,38 +82,40 @@ class SerialAT:
         """
         start_time = time.time()
         # 先檢查現有隊列
-        for resp in list(self._response_queue):
-            if resp.startswith(prefix):
-                # 如果需要檢查UID
-                if target_uid and prefix == "MDTG-MSG":
-                    parts = resp.split()
-                    # 確保有足夠的部分且UID匹配
-                    if len(parts) >= 3 and parts[1] == target_uid:
+        with self._queue_lock:
+            for resp in list(self._response_queue):
+                if resp.startswith(prefix):
+                    # 如果需要檢查UID
+                    if target_uid and prefix == "MDTG-MSG":
+                        parts = resp.split()
+                        # 確保有足夠的部分且UID匹配
+                        if len(parts) >= 3 and parts[1] == target_uid:
+                            self._response_queue.remove(resp)
+                            return resp
+                    # 如果不需要檢查UID或者不是MDTG-MSG
+                    elif not target_uid:
                         self._response_queue.remove(resp)
                         return resp
-                # 如果不需要檢查UID或者不是MDTG-MSG
-                elif not target_uid:
-                    self._response_queue.remove(resp)
-                    return resp
         
         # 等待新響應
         while time.time() - start_time < timeout:
             if self._response_event.wait(0.1):  # 短暫等待以便檢查是否有新響應
                 self._response_event.clear()
                 # 檢查隊列中是否有匹配的響應
-                for resp in list(self._response_queue):
-                    if resp.startswith(prefix):
-                        # 如果需要檢查UID
-                        if target_uid and prefix == "MDTG-MSG":
-                            parts = resp.split()
-                            # 確保有足夠的部分且UID匹配
-                            if len(parts) >= 3 and parts[1] == target_uid:
+                with self._queue_lock:
+                    for resp in list(self._response_queue):
+                        if resp.startswith(prefix):
+                            # 如果需要檢查UID
+                            if target_uid and prefix == "MDTG-MSG":
+                                parts = resp.split()
+                                # 確保有足夠的部分且UID匹配
+                                if len(parts) >= 3 and parts[1] == target_uid:
+                                    self._response_queue.remove(resp)
+                                    return resp
+                            # 如果不需要檢查UID或者不是MDTG-MSG
+                            elif not target_uid:
                                 self._response_queue.remove(resp)
                                 return resp
-                        # 如果不需要檢查UID或者不是MDTG-MSG
-                        elif not target_uid:
-                            self._response_queue.remove(resp)
-                            return resp
         
         return None  # 超時，沒有找到匹配的響應
 

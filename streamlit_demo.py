@@ -3,7 +3,8 @@ import time
 import sys
 import logging
 import pandas as pd
-from rl62m02_provisioner import SerialAT, Provisioner
+from rl62m02.serial_at import SerialAT
+from rl62m02.provisioner import Provisioner
 from device_manager import DeviceManager
 from RL_device_control import RLMeshDeviceController
 from modbus import ModbusRTU

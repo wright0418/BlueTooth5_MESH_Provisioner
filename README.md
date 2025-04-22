@@ -103,53 +103,75 @@
 
 ## 4. 使用方法
 
-### 4.1 基本設置
+### 4.1 安裝套件
+
+```bash
+# 從目錄安裝
+cd rl62m02
+pip install -e .
+
+# 或者，如果已經打包
+pip install rl62m02-0.1.0.tar.gz
+```
+
+### 4.2 基本設置
 
 ```python
 # 導入必要的模組
-from rl62m02_provisioner import SerialAT, Provisioner
-from RL_device_control import RLMeshDeviceController
+from rl62m02 import create_provisioner
+from rl62m02.controllers.mesh_controller import RLMeshDeviceController
 import time
 
-# 初始化串口通訊
-com_port = "COM4"  # 根據實際 COM 埠修改
-ser = SerialAT(com_port, 115200)
+# 快速初始化（一行代碼創建所需的所有物件）
+serial_at, provisioner, device_manager = create_provisioner("COM4", 115200)
 
-# 創建 Provisioner 實例
-prov = Provisioner(ser)
+# 檢查設備版本
+version = provisioner.get_version()
+print(f"設備版本: {version}")
 
 # 創建設備控制器
-controller = RLMeshDeviceController(prov)
+controller = RLMeshDeviceController(provisioner)
 ```
 
-### 4.2 設備掃描與配網
+### 4.3 設備掃描與配網
 
 ```python
-# 掃描設備
-scan_result = prov.scan_nodes(scan_time=5)
-print("掃描結果:", scan_result)
+# 使用便捷函數掃描設備
+from rl62m02 import scan_devices
+
+devices = scan_devices(provisioner, scan_time=5.0)
+print(f"發現 {len(devices)} 個設備:")
+for i, device in enumerate(devices):
+    print(f"{i+1}. UUID: {device['uuid']}, MAC地址: {device['mac address']}")
 
 # 自動配網綁定設備
-if scan_result:
-    target = scan_result[0]
-    print(f"開始自動綁定 UUID: {target['uuid']}")
-    result = prov.auto_provision_node(target['uuid'])
-    print('自動綁定結果:', result)
+from rl62m02 import provision_device
+
+if devices:
+    # 選擇第一個設備進行配置
+    result = provision_device(
+        provisioner, 
+        devices[0]['uuid'], 
+        device_manager=device_manager,
+        device_name="客廳RGB燈",
+        device_type="RGB_LED"
+    )
     
-    # 如果綁定成功，獲取 unicast_addr
-    if result['result'] == 'success':
-        unicast_addr = result['unicast_addr']
+    if result.get('result') == 'success':
+        unicast_addr = result.get('unicast_addr')
         print(f"設備已成功綁定，unicast_addr: {unicast_addr}")
+    else:
+        print(f"設備配置失敗: {result}")
 ```
 
-### 4.3 RGB LED 設備控制
+### 4.4 RGB LED 設備控制
 
 ```python
 # 假設 unicast_addr 已經通過配網獲取
 unicast_addr = "0x0100"
 
 # 註冊 RGB LED 設備
-controller.register_device(unicast_addr, RLMeshDeviceController.DEVICE_TYPE_RGB_LED, "客廳RGB燈")
+controller.register_device(unicast_addr, "RGB_LED", "客廳RGB燈")
 
 # 控制 RGB LED - 白光
 controller.control_rgb_led(unicast_addr, 255, 255, 0, 0, 0)  # 冷光和暖光最大
@@ -167,14 +189,14 @@ controller.control_rgb_led(unicast_addr, 0, 0, 255, 0, 255)
 controller.control_rgb_led(unicast_addr, 0, 0, 0, 0, 0)
 ```
 
-### 4.4 插座控制
+### 4.5 插座控制
 
 ```python
 # 假設 unicast_addr 已經通過配網獲取
 unicast_addr = "0x0200"
 
 # 註冊插座設備
-controller.register_device(unicast_addr, RLMeshDeviceController.DEVICE_TYPE_PLUG, "主臥插座")
+controller.register_device(unicast_addr, "PLUG", "主臥插座")
 
 # 開啟插座
 controller.control_plug(unicast_addr, True)
@@ -183,17 +205,17 @@ controller.control_plug(unicast_addr, True)
 controller.control_plug(unicast_addr, False)
 ```
 
-### 4.5 Smart-Box 設備控制
+### 4.6 Smart-Box 設備控制
 
 ```python
 # 假設 unicast_addr 已經通過配網獲取
 unicast_addr = "0x0300"
 
 # 註冊 Smart-Box 設備
-controller.register_device(unicast_addr, RLMeshDeviceController.DEVICE_TYPE_SMART_BOX, "智能溫控器")
+controller.register_device(unicast_addr, "SMART_BOX", "智能溫控器")
 
 # 讀取保持寄存器
-controller.read_smart_box_rtu(unicast_addr, 1, ModbusRTU.READ_HOLDING_REGISTERS, 0, 10)
+controller.read_smart_box_rtu(unicast_addr, 1, controller.modbus.READ_HOLDING_REGISTERS, 0, 10)
 
 # 寫入單個寄存器
 controller.write_smart_box_register(unicast_addr, 1, 100, 12345)
@@ -205,14 +227,14 @@ controller.write_smart_box_registers(unicast_addr, 1, 200, [1111, 2222, 3333])
 controller.write_smart_box_coil(unicast_addr, 1, 0, True)
 ```
 
-### 4.6 Air-Box 環境監測設備控制
+### 4.7 Air-Box 環境監測設備控制
 
 ```python
 # 假設 unicast_addr 已經通過配網獲取
 unicast_addr = "0x0400"
 
 # 註冊 Air-Box 設備
-controller.register_device(unicast_addr, RLMeshDeviceController.DEVICE_TYPE_AIR_BOX, "會議室空氣監測器")
+controller.register_device(unicast_addr, "AIR_BOX", "會議室空氣監測器")
 
 # 讀取環境數據
 result = controller.read_air_box_data(unicast_addr, 1)  # 1 是從站地址
@@ -233,14 +255,14 @@ except KeyboardInterrupt:
     print("監測已停止")
 ```
 
-### 4.7 電錶設備控制
+### 4.8 電錶設備控制
 
 ```python
 # 假設 unicast_addr 已經通過配網獲取
 unicast_addr = "0x0500"
 
 # 註冊電錶設備
-controller.register_device(unicast_addr, RLMeshDeviceController.DEVICE_TYPE_POWER_METER, "主線路電錶")
+controller.register_device(unicast_addr, "POWER_METER", "主線路電錶")
 
 # 讀取電力數據
 result = controller.read_power_meter_data(unicast_addr, 1)  # 1 是從站地址
@@ -260,7 +282,7 @@ except KeyboardInterrupt:
     print("監測已停止")
 ```
 
-### 4.8 錯誤處理
+### 4.9 錯誤處理
 
 ```python
 try:
@@ -281,7 +303,7 @@ RLMeshDeviceController 提供了設備註冊與管理功能：
 
 ```python
 # 註冊設備
-controller.register_device(unicast_addr, device_type, device_name)
+controller.register_device(unicast_addr, "RGB_LED", "客廳RGB燈")
 
 # 獲取已註冊的所有設備
 devices = controller.get_registered_devices()
@@ -295,11 +317,11 @@ print(devices)
 系統提供完整的設備管理功能，透過 DeviceManager 類實現：
 
 ```python
-# 導入設備管理器
-from device_manager import DeviceManager
-
 # 創建設備管理器實例，使用JSON檔案保存設備資訊
-device_manager = DeviceManager("devices.json")
+# 如果使用 create_provisioner，會自動創建 device_manager
+# 否則可以手動創建
+from rl62m02 import DeviceManager
+device_manager = DeviceManager("mesh_devices.json")
 
 # 添加設備
 device_manager.add_device("uuid-001", "AA:BB:CC:DD:EE:01", "0x0001", "客廳燈")
@@ -322,21 +344,6 @@ print(f"設備數量: {info['device_count']}")
 print(f"群組數量: {info['group_count']}")
 ```
 
-### 5.3 設備管理整合
-
-主程式中已經整合了設備管理功能，可通過選單選項 "8. 設備管理" 進行以下操作：
-
-1. 顯示所有設備
-2. 顯示所有群組
-3. 創建新群組
-4. 添加設備到群組
-5. 從群組移除設備
-6. 建立設備連動關係
-7. 解除設備連動關係 
-8. 全部解除綁定
-
-綁定和解綁設備時會自動更新設備管理記錄。
-
 ## 6. 錯誤處理
 
 所有的控制命令都會返回執行結果，建議在實際應用中加入適當的錯誤處理：
@@ -352,21 +359,30 @@ except Exception as e:
     print(f"發生錯誤: {e}")
 ```
 
-## 7. 互動式測試
+## 7. 進階用法
 
-系統提供了一系列測試功能，可用於驗證設備控制功能：
+### 設備群組操作
 
 ```python
-from RL_device_control import test_rgb_led_control, test_plug_control, test_smart_box_control
+# 設定群組地址
+group_addr = "0xc000"
 
-# 測試 RGB LED 控制
-test_rgb_led_control(controller, "0x0100")
+# 將設備訂閱到該群組
+provisioner.subscribe_group(unicast_addr, group_addr)
 
-# 測試插座控制
-test_plug_control(controller, "0x0200")
+# 設定設備推播到群組
+provisioner.publish_to_target(unicast_addr, group_addr)
+```
 
-# 測試 Smart-Box 控制
-test_smart_box_control(controller, "0x0300")
+### 觀察模式
+
+```python
+# 進入觀察模式，監聽所有周邊訊息 (Ctrl+C 退出)
+try:
+    print("進入觀察模式，監聽設備消息...")
+    provisioner.observe()
+except KeyboardInterrupt:
+    print("退出觀察模式")
 ```
 
 ## 8. 命令協議格式
@@ -391,28 +407,84 @@ test_smart_box_control(controller, "0x0300")
 1. 請確保在使用前正確連接實體裝置到指定的 COM 埠
 2. 設備必須先成功配網才能進行控制
 3. 若出現通訊錯誤，請檢查設備連接狀態與網路狀態
-4. 使用完畢後請確保關閉串口連接 (`ser.close()`)
+4. 使用完畢後請確保關閉串口連接 (`serial_at.close()`)
+5. 控制設備時請確保註冊的設備類型與實際設備類型匹配
+6. 網絡通訊可能會有延遲，如果控制指令沒有立即得到響應，可能需要增加超時時間或重試機制
 
-## 10. 進階用法
+## 10. 完整示例
 
-### 設備群組操作
-
-```python
-# 設定群組地址
-group_addr = "0xc000"
-
-# 將設備訂閱到該群組
-prov.subscribe_group(unicast_addr, group_addr)
-
-# 設定設備推播到群組
-prov.publish_to_target(unicast_addr, group_addr)
-```
-
-### 觀察模式
+下面是一個完整的示例，展示如何掃描、配置和控制 RL Mesh 設備：
 
 ```python
-# 進入觀察模式，監聽所有周邊訊息 (Ctrl+C 退出)
-prov.observe()
+from rl62m02 import create_provisioner, scan_devices, provision_device
+from rl62m02.controllers.mesh_controller import RLMeshDeviceController
+import time
+
+def main():
+    # 1. 初始化通訊和配置
+    print("初始化設備...")
+    serial_at, provisioner, device_manager = create_provisioner("COM3", 115200)
+    
+    # 2. 掃描設備
+    print("掃描設備中...")
+    devices = scan_devices(provisioner, scan_time=5.0)
+    print(f"發現 {len(devices)} 個設備:")
+    for i, device in enumerate(devices):
+        print(f"{i+1}. UUID: {device['uuid']}, MAC地址: {device['mac address']}")
+    
+    if not devices:
+        print("未找到設備，請確認設備已開啟並在範圍內")
+        return
+    
+    # 3. 選擇並配置設備
+    target_device = devices[0]  # 選擇第一個設備
+    print(f"開始配置設備 {target_device['uuid']}...")
+    
+    result = provision_device(
+        provisioner, 
+        target_device['uuid'], 
+        device_manager=device_manager,
+        device_name="測試設備",
+        device_type="RGB_LED"  # 假設是RGB LED設備
+    )
+    
+    if result.get('result') != 'success':
+        print(f"設備配置失敗: {result}")
+        return
+        
+    unicast_addr = result.get('unicast_addr')
+    print(f"設備配置成功，Unicast地址: {unicast_addr}")
+    
+    # 4. 控制設備
+    print("初始化設備控制器...")
+    device_controller = RLMeshDeviceController(provisioner)
+    device_controller.register_device(unicast_addr, "RGB_LED", "測試燈")
+    
+    print("開始控制設備...")
+    
+    # 設置為紅色
+    print("設置為紅色...")
+    device_controller.control_rgb_led(unicast_addr, 0, 0, 255, 0, 0)
+    time.sleep(2)
+    
+    # 設置為綠色
+    print("設置為綠色...")
+    device_controller.control_rgb_led(unicast_addr, 0, 0, 0, 255, 0)
+    time.sleep(2)
+    
+    # 設置為藍色
+    print("設置為藍色...")
+    device_controller.control_rgb_led(unicast_addr, 0, 0, 0, 0, 255)
+    time.sleep(2)
+    
+    # 設置為白色
+    print("設置為白色...")
+    device_controller.control_rgb_led(unicast_addr, 255, 255, 0, 0, 0)
+    
+    print("設備控制演示完成")
+
+if __name__ == "__main__":
+    main()
 ```
 
 ## 11. 設備資料結構
@@ -438,75 +510,27 @@ DeviceManager 使用的 JSON 檔案結構如下：
 }
 ```
 
-## 12. Python 程式碼結構與功能說明
+## 12. 命令行工具
 
-本專案包含以下 Python 程式碼檔案，每個檔案的功能與結構如下：
+RL62M02 套件提供了命令行工具，可以直接在終端中使用：
 
-### 12.1 `device_manager.py`
-- **功能**：
-  - 提供設備管理功能，包括設備資訊記錄、群組管理和設備連動關係管理。
-  - 支援 JSON 檔案保存設備資訊。
-- **主要類別與方法**：
-  - `DeviceManager` 類：
-    - `add_device(uuid, mac_address, unicast_addr, name)`：新增設備。
-    - `create_group(group_name)`：創建設備群組。
-    - `add_device_to_group(unicast_addr, group_name)`：將設備添加到群組。
-    - `link_devices(source_addr, target_addr)`：建立設備連動關係。
-    - `unlink_devices(source_addr, target_addr)`：解除設備連動關係。
+```bash
+# 掃描設備
+rl62m02 scan COM3
 
-### 12.2 `mesh_devices.json`
-- **功能**：
-  - 保存 Mesh 設備的靜態資訊，包括 UUID、MAC 地址、單播地址、名稱、群組和連動關係。
+# 配置設備
+rl62m02 provision COM3 --uuid <設備UUID> --name "客廳燈" --type RGB_LED
 
-### 12.3 `modbus.py`
-- **功能**：
-  - 提供 Modbus RTU 協議的封包生成與解析功能。
-  - 支援 CRC16 校驗。
-- **主要類別與方法**：
-  - `ModbusRTU` 類：
-    - `generate_request(function_code, start_addr, quantity)`：生成 Modbus 請求封包。
-    - `parse_response(response)`：解析 Modbus 回應封包。
+# 控制設備
+rl62m02 control COM3 --addr 0x0100 light --value 255,255,0,0,0
+```
 
-### 12.4 `RL_device_control.py`
-- **功能**：
-  - 提供對 Mesh 設備的高階控制功能，包括 RGB LED、插座和 Smart-Box 設備。
-- **主要類別與方法**：
-  - `RLMeshDeviceController` 類：
-    - `register_device(unicast_addr, device_type, name)`：註冊設備。
-    - `control_rgb_led(unicast_addr, cw, ww, r, g, b)`：控制 RGB LED 設備。
-    - `control_plug(unicast_addr, state)`：控制插座設備。
-    - `read_smart_box_rtu(unicast_addr, slave_id, function_code, start_addr, quantity)`：讀取 Smart-Box 資料。
+更多命令和選項可以查看幫助：
 
-### 12.5 `RL_device_demo.py`
-- **功能**：
-  - 提供互動式測試功能，用於驗證設備控制功能。
-- **主要函數**：
-  - `test_rgb_led_control(controller, unicast_addr)`：測試 RGB LED 控制。
-  - `test_plug_control(controller, unicast_addr)`：測試插座控制。
-  - `test_smart_box_control(controller, unicast_addr)`：測試 Smart-Box 控制。
-
-### 12.6 `rl62m02_provisioner.py`
-- **功能**：
-  - 提供 Mesh 網路配置功能，包括設備掃描、配網和綁定。
-- **主要類別與方法**：
-  - `SerialAT` 類：
-    - `send_command(command)`：發送 AT 指令。
-    - `read_response()`：讀取回應。
-  - `Provisioner` 類：
-    - `scan_nodes(scan_time)`：掃描設備。
-    - `auto_provision_node(uuid)`：自動綁定設備。
-    - `subscribe_group(unicast_addr, group_addr)`：訂閱群組。
-    - `publish_to_target(unicast_addr, target_addr)`：設置推播目標。
-
-
-### 12.7 `Doc/`
-- **功能**：
-  - 提供相關技術文件與使用說明。
-  - 包含：
-    - `RL_Mesh_Device.md`：Mesh 設備使用說明。
-    - `RL62M02_Mesh_AT_CMD_Programming_Guide_v1.0.pdf`：AT 指令集編程指南。
-    - `RL62M02_Provision_ATCMD.md`：Provision AT 指令說明。
+```bash
+rl62m02 --help
+```
 
 ---
 
-更詳細的 AT 指令說明請參考 `RL62M02_Provision_ATCMD.md` 與 `RL62M02_Mesh_AT_CMD_Programming_Guide_v1.0.pdf` 文件。
+更詳細的 AT 指令說明請參考 `Doc/RL62M02_Provision_ATCMD.md` 與 `Doc/RL62M02_Mesh_AT_CMD_Programming_Guide_v1.0.pdf` 文件。

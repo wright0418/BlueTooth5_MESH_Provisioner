@@ -1,2 +1,0 @@
-[console_scripts]
-rl62m02 = rl62m02.cli:main

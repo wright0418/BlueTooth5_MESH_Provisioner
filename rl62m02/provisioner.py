@@ -241,6 +241,30 @@ class Provisioner:
         """
         resp = self._send_and_wait(f'AT+AKA {dst} {app_key_index} {net_key_index}', expected_prefix='AKA-MSG')
         return resp
+        
+    def node_reset(self, unicast_addr: str):
+        """
+        解除綁定設備 (Node Reset)
+        
+        Args:
+            unicast_addr (str): 設備的 Unicast 地址
+            
+        Returns:
+            str: 如果成功，返回 'NR-MSG SUCCESS...'，否則返回 None 或錯誤消息
+        """
+        # 清除之前的響應緩存
+        self.responses.clear()
+        # 使用內建的超時時間和前綴
+        resp = self._send_and_wait(f'AT+NR {unicast_addr}', 
+                                  timeout=self.NR_TIMEOUT, 
+                                  expected_prefix='NR-MSG')
+        # 如果沒有得到預期響應，嘗試從緩存中查找
+        if resp is None:
+            nr_responses = [r for r in self.responses if r.startswith('NR-MSG')]
+            if nr_responses:
+                resp = nr_responses[-1]  # 取最後一個匹配的響應
+        
+        return resp
 
     def auto_provision_node(self, uuid: str):
         """

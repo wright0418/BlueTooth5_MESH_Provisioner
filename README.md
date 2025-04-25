@@ -114,186 +114,115 @@ pip install -e .
 pip install rl62m02-0.1.0.tar.gz
 ```
 
-### 4.2 基本設置
+### 4.2 使用 RL_devices_demo.py 互動式設備管理工具
+
+推薦使用專為本專案提供的 `RL_devices_demo.py` 腳本來掃描、綁定、管理與控制設備，免去手動撰寫程式碼。
+
+```bash
+python RL_devices_demo.py <COM 埠>
+```
+
+啟動後，會顯示以下功能選單：
+
+1. 掃描並綁定新設備
+2. 顯示所有已綁定設備
+3. 設定設備名稱
+4. 設定訂閱
+5. 設定推播
+6. 測試控制設備
+7. 解除綁定設備
+0. 離開
+
+- 選單操作時依提示輸入對應編號及參數
+- 操作日誌同時輸出到終端與 `mesh_device.log` 檔案
+- 設備清單與設定儲存在 `new1_device.json`
+
+### 4.3 使用 mesh_device_manager_demo.py 進階設備管理工具
+
+`mesh_device_manager_demo.py` 是一個基於 `MeshDeviceManager` 類別的全功能設備管理示範程式，提供更完整的設備管理與控制功能。
+
+```bash
+python mesh_device_manager_demo.py <COM 埠>
+```
+
+啟動後，會顯示以下功能選單：
+
+1. 掃描設備 - 掃描周邊可用的 Mesh 設備並提供綁定選項
+2. 顯示所有設備 - 以表格方式顯示所有已綁定設備的詳細資訊
+3. 設定設備名稱 - 修改已綁定設備的顯示名稱
+4. 設定訂閱 - 設定設備的訂閱通道
+5. 設定推播 - 設定設備的推播通道
+6. 控制設備 - 依據設備類型提供不同控制選項
+7. 解除綁定設備 - 解除特定設備的綁定
+0. 離開
+
+**特色功能：**
+
+- **更友善的設備管理**：以表格形式顯示設備資訊，包含名稱、類型、UID、MAC地址、位置與狀態
+- **設備類型自動化控制**：根據不同設備類型(RGB LED、插座等)提供對應的控制選項
+- **RGB LED 控制**：提供多種顏色預設與自定義顏色設定
+- **插座控制**：支援開啟、關閉、狀態切換操作
+- **設備狀態顯示**：顯示設備當前的開關狀態
+- **設備位置記錄**：可記錄設備的安裝位置
+- **JSON 設備記錄**：設備資訊儲存於 `My_device.json` 檔案
+
+**使用範例：**
+
+1. **掃描並綁定設備**：
+   - 選擇選項 `1` 掃描周圍設備
+   - 輸入掃描時間(例如 5 秒)
+   - 從掃描結果中選擇要綁定的設備編號
+   - 選擇設備類型(RGB LED、插座、Smart-Box 等)
+   - 輸入設備名稱與位置
+   - 依照提示設定訂閱與推播通道
+
+2. **控制 RGB LED 設備**：
+   - 選擇選項 `6` 控制設備
+   - 選擇 RGB LED 設備編號
+   - 選擇顏色預設(白光、紅色、綠色、藍色、紫色)或自定義顏色
+   - 自定義顏色時可分別設定冷光、暖光、紅、綠、藍五個通道值(0-255)
+
+3. **控制插座設備**：
+   - 選擇選項 `6` 控制設備
+   - 選擇插座設備編號
+   - 選擇操作(開啟、關閉、切換狀態)
+
+本工具專為設備管理與測試設計，適合進行設備初始配置、功能驗證與系統整合測試使用。
+
+---
+
+### 4.4 進階函式庫手動操作 (非互動模式)
+
+以下範例展示如何直接透過函式庫進行初始化與操作，屬於進階用法，建議已熟悉 Mesh AT 指令與專案結構後再使用。
 
 ```python
-# 導入必要的模組
+# 導入並初始化
 from rl62m02 import create_provisioner
 from rl62m02.controllers.mesh_controller import RLMeshDeviceController
-import time
+import logging
 
-# 快速初始化（一行代碼創建所需的所有物件）
-serial_at, provisioner, device_manager = create_provisioner("COM4", 115200)
+logging.basicConfig(level=logging.INFO)
+logging.getLogger('rl62m02').setLevel(logging.DEBUG)
+# create_provisioner 僅回傳 (serial_at, provisioner, _)，不再直接管理 DeviceManager
+serial_at, provisioner, _ = create_provisioner("COM3", 115200)
 
-# 檢查設備版本
-version = provisioner.get_version()
-print(f"設備版本: {version}")
-
-# 創建設備控制器
+# 建立控制器
 controller = RLMeshDeviceController(provisioner)
+
+# 示例：掃描設備
+devices = provisioner.scan_devices(scan_time=5)
+print([d['uuid'] for d in devices])
+
+# 示例：綁定設備
+res = provisioner.provision_device(devices[0]['uuid'])
+print(res)
+
+# 示例：訂閱與推播
+provisioner.subscribe_group(res['unicast_addr'], '0xC000')
+provisioner.publish_to_target(res['unicast_addr'], '0xC001')
 ```
 
-### 4.3 設備掃描與配網
-
-```python
-# 使用便捷函數掃描設備
-from rl62m02 import scan_devices
-
-devices = scan_devices(provisioner, scan_time=5.0)
-print(f"發現 {len(devices)} 個設備:")
-for i, device in enumerate(devices):
-    print(f"{i+1}. UUID: {device['uuid']}, MAC地址: {device['mac address']}")
-
-# 自動配網綁定設備
-from rl62m02 import provision_device
-
-if devices:
-    # 選擇第一個設備進行配置
-    result = provision_device(
-        provisioner, 
-        devices[0]['uuid'], 
-        device_manager=device_manager,
-        device_name="客廳RGB燈",
-        device_type="RGB_LED"
-    )
-    
-    if result.get('result') == 'success':
-        unicast_addr = result.get('unicast_addr')
-        print(f"設備已成功綁定，unicast_addr: {unicast_addr}")
-    else:
-        print(f"設備配置失敗: {result}")
-```
-
-### 4.4 RGB LED 設備控制
-
-```python
-# 假設 unicast_addr 已經通過配網獲取
-unicast_addr = "0x0100"
-
-# 註冊 RGB LED 設備
-controller.register_device(unicast_addr, "RGB_LED", "客廳RGB燈")
-
-# 控制 RGB LED - 白光
-controller.control_rgb_led(unicast_addr, 255, 255, 0, 0, 0)  # 冷光和暖光最大
-
-# 控制 RGB LED - 紅色
-controller.control_rgb_led(unicast_addr, 0, 0, 255, 0, 0)
-
-# 控制 RGB LED - 藍色
-controller.control_rgb_led(unicast_addr, 0, 0, 0, 0, 255)
-
-# 混合色 - 紫色
-controller.control_rgb_led(unicast_addr, 0, 0, 255, 0, 255)
-
-# 關閉燈光
-controller.control_rgb_led(unicast_addr, 0, 0, 0, 0, 0)
-```
-
-### 4.5 插座控制
-
-```python
-# 假設 unicast_addr 已經通過配網獲取
-unicast_addr = "0x0200"
-
-# 註冊插座設備
-controller.register_device(unicast_addr, "PLUG", "主臥插座")
-
-# 開啟插座
-controller.control_plug(unicast_addr, True)
-
-# 關閉插座
-controller.control_plug(unicast_addr, False)
-```
-
-### 4.6 Smart-Box 設備控制
-
-```python
-# 假設 unicast_addr 已經通過配網獲取
-unicast_addr = "0x0300"
-
-# 註冊 Smart-Box 設備
-controller.register_device(unicast_addr, "SMART_BOX", "智能溫控器")
-
-# 讀取保持寄存器
-controller.read_smart_box_rtu(unicast_addr, 1, controller.modbus.READ_HOLDING_REGISTERS, 0, 10)
-
-# 寫入單個寄存器
-controller.write_smart_box_register(unicast_addr, 1, 100, 12345)
-
-# 寫入多個寄存器
-controller.write_smart_box_registers(unicast_addr, 1, 200, [1111, 2222, 3333])
-
-# 控制線圈
-controller.write_smart_box_coil(unicast_addr, 1, 0, True)
-```
-
-### 4.7 Air-Box 環境監測設備控制
-
-```python
-# 假設 unicast_addr 已經通過配網獲取
-unicast_addr = "0x0400"
-
-# 註冊 Air-Box 設備
-controller.register_device(unicast_addr, "AIR_BOX", "會議室空氣監測器")
-
-# 讀取環境數據
-result = controller.read_air_box_data(unicast_addr, 1)  # 1 是從站地址
-
-# 顯示環境數據
-print(f"溫度: {result['temperature']}°C")
-print(f"濕度: {result['humidity']}%")
-print(f"PM2.5: {result['pm25']} μg/m³")
-print(f"CO2: {result['co2']} ppm")
-
-# 連續監測模式
-try:
-    while True:
-        result = controller.read_air_box_data(unicast_addr, 1)
-        print(f"溫度: {result['temperature']:5.1f}°C | 濕度: {result['humidity']:5.1f}% | PM2.5: {result['pm25']:3d} μg/m³ | CO2: {result['co2']:4d} ppm")
-        time.sleep(3)  # 每3秒更新一次
-except KeyboardInterrupt:
-    print("監測已停止")
-```
-
-### 4.8 電錶設備控制
-
-```python
-# 假設 unicast_addr 已經通過配網獲取
-unicast_addr = "0x0500"
-
-# 註冊電錶設備
-controller.register_device(unicast_addr, "POWER_METER", "主線路電錶")
-
-# 讀取電力數據
-result = controller.read_power_meter_data(unicast_addr, 1)  # 1 是從站地址
-
-# 顯示電力數據
-print(f"電壓: {result['voltage']} V")
-print(f"電流: {result['current']} A")
-print(f"功率: {result['power']} W")
-
-# 連續監測模式
-try:
-    while True:
-        result = controller.read_power_meter_data(unicast_addr, 1)
-        print(f"電壓: {result['voltage']:6.1f} V | 電流: {result['current']:5.3f} A | 功率: {result['power']:5.1f} W")
-        time.sleep(1)  # 每1秒更新一次
-except KeyboardInterrupt:
-    print("監測已停止")
-```
-
-### 4.9 錯誤處理
-
-```python
-try:
-    resp = controller.control_rgb_led(unicast_addr, 255, 255, 0, 0, 0)
-    if not resp or not resp.startswith('MDTS-MSG SUCCESS'):
-        print(f"控制失敗: {resp}")
-    else:
-        print("控制成功")
-except Exception as e:
-    print(f"發生錯誤: {e}")
-```
+<!-- 其餘章節編號向後調整 -->
 
 ## 5. 設備註冊與管理
 

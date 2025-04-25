@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="rl62m02",
-    version="0.1.0",
+    version="0.2.0",
     description="RL Mesh 設備配置與控制套件",
     author="RichLink",
     author_email="your.email@example.com",

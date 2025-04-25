@@ -16,6 +16,8 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S'
 )
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 def main():
     if len(sys.argv) < 2:
@@ -324,6 +326,7 @@ def control_device(device_manager):
         if 0 <= idx < len(devices):
             device = devices[idx]
             device_type = device.get('devName') or '未指定'  # 從 devName 讀取類型
+            unicast_addr = device.get('uid', '')
             
             # 根據設備類型提供不同的控制選項
             if device_type == "RGB_LED":
@@ -342,17 +345,33 @@ def control_device(device_manager):
                 if action == "0":
                     return
                 elif action == "1":
-                    result = device_manager.control_device(idx, "set_white", cold=255, warm=255)
+                    # 使用控制器直接操作設備
+                    try:
+                        print(f"發送白光指令到設備 {unicast_addr}...")
+                        result = device_manager.control_device(idx, "set_white", cold=255, warm=255)
+                        print(f"設備響應: {result.get('message', '無響應')}")
+                    except Exception as e:
+                        print(f"發送指令時出錯: {e}")
                 elif action == "2":
+                    print(f"發送紅光指令到設備 {unicast_addr}...")
                     result = device_manager.control_device(idx, "set_rgb", red=255)
+                    print(f"設備響應: {result.get('message', '無響應')}")
                 elif action == "3":
+                    print(f"發送綠光指令到設備 {unicast_addr}...")
                     result = device_manager.control_device(idx, "set_rgb", green=255)
+                    print(f"設備響應: {result.get('message', '無響應')}")
                 elif action == "4":
+                    print(f"發送藍光指令到設備 {unicast_addr}...")
                     result = device_manager.control_device(idx, "set_rgb", blue=255)
+                    print(f"設備響應: {result.get('message', '無響應')}")
                 elif action == "5":
+                    print(f"發送紫光指令到設備 {unicast_addr}...")
                     result = device_manager.control_device(idx, "set_rgb", red=255, blue=255)
+                    print(f"設備響應: {result.get('message', '無響應')}")
                 elif action == "6":
+                    print(f"發送關閉指令到設備 {unicast_addr}...")
                     result = device_manager.control_device(idx, "turn_off")
+                    print(f"設備響應: {result.get('message', '無響應')}")
                 elif action == "7":
                     try:
                         cold = int(input("請輸入冷光值 (0-255): ").strip())
@@ -360,9 +379,12 @@ def control_device(device_manager):
                         red = int(input("請輸入紅色值 (0-255): ").strip())
                         green = int(input("請輸入綠色值 (0-255): ").strip())
                         blue = int(input("請輸入藍色值 (0-255): ").strip())
+                        
+                        print(f"發送自定義顏色指令到設備 {unicast_addr}...")
                         result = device_manager.control_device(idx, "set_rgb", 
                                                                cold=cold, warm=warm, 
                                                                red=red, green=green, blue=blue)
+                        print(f"設備響應: {result.get('message', '無響應')}")
                     except ValueError:
                         print("請輸入有效的數字")
                         return
@@ -372,6 +394,9 @@ def control_device(device_manager):
                 
                 if result["result"] == "success":
                     print("設備控制成功")
+                    # 更新設備狀態顯示
+                    new_state = "開啟" if action != "6" else "關閉"
+                    print(f"設備當前狀態: {new_state}")
                 else:
                     print(f"控制失敗: {result.get('error', '未知錯誤')}")
                     
@@ -387,19 +412,159 @@ def control_device(device_manager):
                 if action == "0":
                     return
                 elif action == "1":
+                    print(f"發送開啟指令到插座設備 {unicast_addr}...")
                     result = device_manager.control_device(idx, "turn_on")
+                    print(f"設備響應: {result.get('message', '無響應')}")
                 elif action == "2":
+                    print(f"發送關閉指令到插座設備 {unicast_addr}...")
                     result = device_manager.control_device(idx, "turn_off")
+                    print(f"設備響應: {result.get('message', '無響應')}")
                 elif action == "3":
+                    current_state = device.get('state', 0)
+                    state_desc = "關閉" if current_state == 1 else "開啟"
+                    print(f"發送切換狀態指令到插座設備 {unicast_addr}（當前:{current_state}，將切換為{state_desc}）...")
                     result = device_manager.control_device(idx, "toggle")
+                    print(f"設備響應: {result.get('message', '無響應')}")
                 else:
                     print("無效操作")
                     return
                 
                 if result["result"] == "success":
                     print("設備控制成功")
+                    # 更新設備狀態顯示
+                    new_state = ""
+                    if action == "1":
+                        new_state = "開啟"
+                    elif action == "2":
+                        new_state = "關閉"
+                    elif action == "3":
+                        new_state = "關閉" if device.get('state', 0) == 1 else "開啟"
+                    
+                    if new_state:
+                        print(f"設備當前狀態: {new_state}")
                 else:
                     print(f"控制失敗: {result.get('error', '未知錯誤')}")
+                    
+            elif device_type == "SMART_BOX":
+                print("\n智能盒子設備操作:")
+                print("1. 讀取數據")
+                print("2. 寫入數據")
+                print("0. 取消")
+                
+                action = input("請選擇操作: ").strip()
+                
+                if action == "0":
+                    return
+                elif action == "1":
+                    try:
+                        slave_addr = int(input("請輸入從站地址 (通常為 1-247): ").strip())
+                        function_code = int(input("請輸入功能碼 (3=保持寄存器, 4=輸入寄存器): ").strip())
+                        start_addr = int(input("請輸入起始地址 (例如: 0): ").strip())
+                        quantity = int(input("請輸入讀取數量 (例如: 10): ").strip())
+                        
+                        print(f"讀取從站 {slave_addr} 的數據中...")
+                        # 使用裝置控制器直接讀取
+                        result = device_manager.controller.read_smart_box_rtu(
+                            unicast_addr, slave_addr, function_code, start_addr, quantity
+                        )
+                        
+                        print("讀取結果:")
+                        print(f"初始響應: {result.get('initial_response', '無響應')}")
+                        print(f"數據響應: {result.get('mdtg_response', '無數據')}")
+                    except ValueError:
+                        print("請輸入有效的數字")
+                        return
+                elif action == "2":
+                    try:
+                        slave_addr = int(input("請輸入從站地址 (通常為 1-247): ").strip())
+                        reg_addr = int(input("請輸入寄存器地址: ").strip())
+                        reg_value = int(input("請輸入寄存器值: ").strip())
+                        
+                        print(f"寫入從站 {slave_addr} 的數據中...")
+                        # 使用裝置控制器直接寫入
+                        result = device_manager.controller.write_smart_box_register(
+                            unicast_addr, slave_addr, reg_addr, reg_value
+                        )
+                        
+                        print("寫入結果:")
+                        print(f"初始響應: {result.get('initial_response', '無響應')}")
+                        print(f"數據響應: {result.get('mdtg_response', '無數據')}")
+                    except ValueError:
+                        print("請輸入有效的數字")
+                        return
+                else:
+                    print("無效操作")
+                    return
+                    
+            elif device_type == "AIR_BOX":
+                print("\n空氣盒子設備操作:")
+                print("1. 讀取環境數據")
+                print("0. 取消")
+                
+                action = input("請選擇操作: ").strip()
+                
+                if action == "0":
+                    return
+                elif action == "1":
+                    try:
+                        slave_addr = int(input("請輸入從站地址 (通常為 1): ").strip())
+                        
+                        print(f"讀取空氣盒子環境數據中...")
+                        # 使用裝置控制器直接讀取
+                        result = device_manager.controller.read_air_box_data(unicast_addr, slave_addr)
+                        
+                        print("\n環境數據結果:")
+                        if result['temperature'] is not None:
+                            print(f"溫度: {result['temperature']}°C")
+                        if result['humidity'] is not None:
+                            print(f"濕度: {result['humidity']}%")
+                        if result['pm25'] is not None:
+                            print(f"PM2.5: {result['pm25']} μg/m³")
+                        if result['co2'] is not None:
+                            print(f"CO2: {result['co2']} ppm")
+                        
+                        print("\n原始數據:")
+                        print(f"MDTG響應: {result.get('raw_data', {}).get('mdtg_response', '無數據')}")
+                    except ValueError:
+                        print("請輸入有效的數字")
+                        return
+                else:
+                    print("無效操作")
+                    return
+                    
+            elif device_type == "POWER_METER":
+                print("\n電錶設備操作:")
+                print("1. 讀取電力數據")
+                print("0. 取消")
+                
+                action = input("請選擇操作: ").strip()
+                
+                if action == "0":
+                    return
+                elif action == "1":
+                    try:
+                        slave_addr = int(input("請輸入從站地址 (通常為 1): ").strip())
+                        
+                        print(f"讀取電錶數據中...")
+                        # 使用裝置控制器直接讀取
+                        result = device_manager.controller.read_power_meter_data(unicast_addr, slave_addr)
+                        
+                        print("\n電力數據結果:")
+                        if result['voltage'] is not None:
+                            print(f"電壓: {result['voltage']} V")
+                        if result['current'] is not None:
+                            print(f"電流: {result['current']} A")
+                        if result['power'] is not None:
+                            print(f"功率: {result['power']} W")
+                        
+                        print("\n原始數據:")
+                        print(f"MDTG響應: {result.get('raw_data', {}).get('mdtg_response', '無數據')}")
+                    except ValueError:
+                        print("請輸入有效的數字")
+                        return
+                else:
+                    print("無效操作")
+                    return
             else:
                 print(f"目前不支援 {device_type} 類型設備的控制")
         else:
@@ -408,6 +573,8 @@ def control_device(device_manager):
         print("請輸入有效的數字")
     except Exception as e:
         print(f"控制設備時發生錯誤: {e}")
+        import traceback
+        traceback.print_exc()
 
 def unbind_device(device_manager):
     """解除綁定設備"""

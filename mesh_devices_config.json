@@ -1,0 +1,22 @@
+{
+  "devices": [
+    {
+      "uuid": "123E4567E89B12D3A45670100010010D",
+      "mac_address": "70100010010D",
+      "device_name": "sss",
+      "unicast_addr": "0x0100",
+      "subscribe_uid": "0xC000",
+      "publish_uid": "0xC001",
+      "binding_time": "2025-04-22 20:28:02"
+    },
+    {
+      "uuid": "123E4567E89B12D3A45678570000201F",
+      "mac_address": "65570000201F",
+      "device_name": "fdd",
+      "unicast_addr": "0x0101",
+      "subscribe_uid": "0xC000",
+      "publish_uid": "0xC001",
+      "binding_time": "2025-04-22 20:28:05"
+    }
+  ]
+}

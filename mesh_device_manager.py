@@ -41,7 +41,7 @@ class MeshDeviceManager:
     # 裝置綁定的起始 unicast 地址
     START_UNICAST_ADDR = 0x0100
     
-    def __init__(self, port: str, baudrate: int = 115200, device_file: str = DEFAULT_DEVICE_FILE):
+    def __init__(self, port: str, baudrate: int = 115200, device_file: str = DEFAULT_DEVICE_FILE, file_format: str = "standard"):
         """
         初始化 MeshDeviceManager
         
@@ -49,10 +49,12 @@ class MeshDeviceManager:
             port (str): 串口名稱，如 COM3
             baudrate (int): 串口鮑率
             device_file (str): 裝置記錄檔案路徑
+            file_format (str): 檔案格式，可為 "standard" 或 "nodered"
         """
         self.port = port
         self.baudrate = baudrate
         self.device_file = device_file
+        self.file_format = file_format
         self.serial_at = None
         self.provisioner = None
         self.devices = []
@@ -92,6 +94,60 @@ class MeshDeviceManager:
         else:
             logger.info(f"找不到裝置記錄檔 {self.device_file}，將建立新檔案")
             self.devices = []
+    
+    def _load_devices_from_nodered(self, file_path):
+        """
+        從 Node-RED 格式的 JSON 檔案載入裝置記錄
+        
+        Args:
+            file_path (str): Node-RED 格式檔案路徑
+            
+        Returns:
+            list: 轉換後的裝置記錄列表
+        """
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                nodered_data = json.load(f)
+                
+            devices = []
+            nodered_devices = nodered_data.get("devices", [])
+            
+            for device in nodered_devices:
+                # 從 Node-RED 格式獲取資訊
+                mac_address = device.get("devMac", "")
+                device_name = device.get("devType", "")
+                unicast_addr = device.get("uid", "")
+                
+                # 將 MAC 地址轉換為無冒號格式 (用於搜索裝置時匹配)
+                mac_without_colon = mac_address.replace(":", "")
+                
+                # 獲取 UUID (如果有提供) 或者保留空白
+                uuid = device.get("uuid", "")
+                
+                # 取得或設定預設值
+                subscribe_uid = device.get("subscribe_uid", self.DEFAULT_GROUP_ADDR)
+                publish_uid = device.get("publish_uid", self.DEFAULT_GROUP_ADDR)
+                binding_time = device.get("binding_time", "")
+                
+                # 創建內部格式的裝置記錄
+                device_info = {
+                    "uuid": uuid,  # 暫時空著，稍後會通過掃描獲取
+                    "mac_address": mac_without_colon,  # 使用無冒號格式
+                    "device_name": device_name,
+                    "unicast_addr": unicast_addr,
+                    "subscribe_uid": subscribe_uid,
+                    "publish_uid": publish_uid,
+                    "binding_time": binding_time
+                }
+                
+                devices.append(device_info)
+                
+            logger.info(f"從 Node-RED 格式檔案載入了 {len(devices)} 個裝置記錄")
+            return devices
+            
+        except Exception as e:
+            logger.error(f"載入 Node-RED 格式裝置記錄檔失敗: {str(e)}")
+            return []
     
     def _save_devices(self):
         """儲存裝置記錄到檔案"""
@@ -240,19 +296,30 @@ class MeshDeviceManager:
             "device": device_info
         }
     
-    def unprovision_all_devices(self):
+    def unprovision_all_devices(self, input_format: str = "standard", input_file: str = None):
         """
         解除所有裝置的綁定
         
+        Args:
+            input_format (str): 輸入檔案格式，可選 "standard" 或 "nodered"
+            input_file (str): 輸入檔案路徑，如未指定則使用預設的 self.device_file
+            
         Returns:
             dict: 解綁結果，包含成功解綁的裝置數量和失敗列表
         """
-        if not self.devices:
-            logger.info("沒有已綁定的裝置")
-            return {"success": True, "message": "沒有已綁定的裝置", "unprovision_count": 0}
-        
-        success_count = 0
-        failed_devices = []
+        # 決定使用哪些裝置資訊進行解綁
+        if input_format == "nodered" and input_file:
+            # 從 Node-RED 格式檔案載入裝置
+            logger.info(f"從 Node-RED 格式檔案 {input_file} 載入裝置資訊")
+            devices_to_unbind = self._load_devices_from_nodered(input_file)
+            if not devices_to_unbind:
+                logger.info("Node-RED 檔案中沒有裝置資訊")
+                return {"success": True, "message": "沒有已綁定的裝置", "unprovision_count": 0}
+        else:
+            if not self.devices:
+                logger.info("沒有已綁定的裝置")
+                return {"success": True, "message": "沒有已綁定的裝置", "unprovision_count": 0}
+            devices_to_unbind = self.devices
         
         # 取得當前已綁定的節點列表
         node_list = self.provisioner.get_node_list()
@@ -267,7 +334,8 @@ class MeshDeviceManager:
                     bound_addresses.append(addr)
         
         logger.info(f"發現 {len(bound_addresses)} 個已綁定的節點")
-        
+        success_count = 0
+        failed_devices = []
         
         # 解綁所有裝置
         for addr in bound_addresses:
@@ -288,51 +356,116 @@ class MeshDeviceManager:
             "failed_devices": failed_devices
         }
     
-    def auto_provision_from_json(self):
+    def auto_provision_from_json(self, input_format: str = "standard", input_file: str = None):
         """
         從 JSON 檔案自動綁定裝置
         
+        Args:
+            input_format (str): 輸入檔案格式，可選 "standard" 或 "nodered"
+            input_file (str): 輸入檔案路徑，如未指定則使用預設的 self.device_file
+            
         Returns:
             dict: 綁定結果，包含成功和失敗的裝置清單
         """
-        if not self.devices:
+        # 決定使用的裝置列表
+        devices_to_bind = []
+        
+        if input_format == "nodered" and input_file:
+            # 從 Node-RED 格式檔案載入裝置
+            logger.info(f"從 Node-RED 格式檔案 {input_file} 載入裝置資訊")
+            devices_to_bind = self._load_devices_from_nodered(input_file)
+        else:
+            # 使用標準格式（內部格式）
+            devices_to_bind = self.devices
+        
+        if not devices_to_bind:
             logger.info("記錄檔中沒有裝置資訊")
             return {"success": True, "message": "沒有裝置需要綁定", "success_count": 0}
         
         # 先掃描周圍裝置
         logger.info("掃描周圍可用裝置...")
         available_devices = self.provisioner.scan_nodes(scan_time=5.0)
-        available_uuids = [d.get("uuid") for d in available_devices]
+        
+        # 進一步處理依賴於 input_format 的邏輯
+        if input_format == "nodered":
+            # Node-RED 格式通常使用 MAC 地址進行匹配
+            # 將掃描到的裝置 MAC 地址格式化為無冒號格式以便比較
+            available_macs = {}
+            for device in available_devices:
+                mac = device.get("mac address", "")
+                uuid = device.get("uuid", "")
+                if mac:
+                    # 移除冒號以便比較
+                    mac_without_colon = mac.replace(":", "")
+                    available_macs[mac_without_colon] = {
+                        "uuid": uuid,
+                        "original_mac": mac
+                    }
+        else:
+            # 標準格式使用 UUID 進行匹配
+            available_uuids = [d.get("uuid") for d in available_devices]
                 
         success_devices = []
         failed_devices = []
         
         # 依序綁定記錄檔中的裝置
-        for device in self.devices:
-            uuid = device.get("uuid")
-            device_name = device.get("device_name", f"Device-{uuid[-6:]}")
+        for device in devices_to_bind:
+            # 處理邏輯依賴於 input_format
+            if input_format == "nodered":
+                # 從 Node-RED 格式獲取的裝置
+                mac_address = device.get("mac_address", "")  # 這個應該是沒有冒號的格式
+                device_name = device.get("device_name", f"Device-Unknown")
+                unicast_addr = device.get("unicast_addr", "")
+                
+                # 根據 MAC 地址查找對應的 UUID
+                if mac_address not in available_macs:
+                    logger.warning(f"裝置 MAC {mac_address} 不在掃描範圍內，跳過")
+                    failed_devices.append({
+                        "mac_address": mac_address,
+                        "device_name": device_name,
+                        "error": "裝置不在掃描範圍內"
+                    })
+                    continue
+                
+                # 使用找到的 UUID
+                uuid = available_macs[mac_address]["uuid"]
+                original_mac = available_macs[mac_address]["original_mac"]
+                logger.info(f"找到裝置 MAC: {mac_address} -> UUID: {uuid}")
+            else:
+                # 標準格式裝置處理邏輯
+                uuid = device.get("uuid")
+                device_name = device.get("device_name", f"Device-{uuid[-6:]}")
+                
+                if uuid not in available_uuids:
+                    logger.warning(f"裝置 {uuid} ({device_name}) 不在掃描範圍內，跳過")
+                    failed_devices.append({
+                        "uuid": uuid,
+                        "device_name": device_name,
+                        "error": "裝置不在掃描範圍內"
+                    })
+                    continue
+            
+            # 獲取訂閱和推播地址（兩種格式都支持）
             subscribe_uid = device.get("subscribe_uid", self.DEFAULT_GROUP_ADDR)
             publish_uid = device.get("publish_uid", self.DEFAULT_GROUP_ADDR)
-            
-            if uuid not in available_uuids:
-                logger.warning(f"裝置 {uuid} ({device_name}) 不在掃描範圍內，跳過")
-                failed_devices.append({
-                    "uuid": uuid,
-                    "device_name": device_name,
-                    "error": "裝置不在掃描範圍內"
-                })
-                break
             
             # 進行裝置綁定
             result = self.provisioner.auto_provision_node(uuid)
             
             if result.get("result") != "success":
                 logger.error(f"綁定失敗: {result}")
-                failed_devices.append({
-                    "uuid": uuid,
+                failed_device = {
                     "device_name": device_name,
                     "error": f"綁定失敗: {result.get('step')}"
-                })
+                }
+                
+                # 根據格式添加識別訊息
+                if input_format == "nodered":
+                    failed_device["mac_address"] = mac_address
+                else:
+                    failed_device["uuid"] = uuid
+                    
+                failed_devices.append(failed_device)
                 continue
             
             unicast_addr = result.get("unicast_addr")
@@ -345,18 +478,28 @@ class MeshDeviceManager:
             logger.info(f"設定推播地址: {publish_uid}")
             pub_result = self.provisioner.publish_to_target(unicast_addr, publish_uid)
             
-            # 更新裝置記錄
-            device["unicast_addr"] = unicast_addr
-            device["binding_time"] = time.strftime("%Y-%m-%d %H:%M:%S")
+            # 如果是標準格式，更新裝置記錄
+            if input_format == "standard":
+                device["unicast_addr"] = unicast_addr
+                device["binding_time"] = time.strftime("%Y-%m-%d %H:%M:%S")
             
-            success_devices.append({
-                "uuid": uuid,
+            # 創建成功裝置記錄
+            success_device = {
                 "device_name": device_name,
                 "unicast_addr": unicast_addr
-            })
+            }
+            
+            # 根據格式添加識別訊息
+            if input_format == "nodered":
+                success_device["mac_address"] = mac_address
+            else:
+                success_device["uuid"] = uuid
+                
+            success_devices.append(success_device)
         
-        # 儲存更新後的裝置記錄
-        self._save_devices()
+        # 如果是標準格式，儲存更新後的裝置記錄
+        if input_format == "standard":
+            self._save_devices()
         
         return {
             "success": len(failed_devices) == 0,
@@ -367,7 +510,8 @@ class MeshDeviceManager:
         }
     
     def reset_and_bind(self, uuid: str, device_name: str, 
-                       subscribe_uid: str = None, publish_uid: str = None):
+                       subscribe_uid: str = None, publish_uid: str = None,
+                       input_format: str = "standard", input_file: str = None):
         """
         先解除所有裝置綁定，然後進行單一裝置綁定
         
@@ -376,6 +520,8 @@ class MeshDeviceManager:
             device_name (str): 裝置名稱
             subscribe_uid (str): 訂閱的 UID，如果為 None 則使用預設群組地址
             publish_uid (str): 推播的 UID，如果為 None 則使用預設群組地址
+            input_format (str): 輸入檔案格式，可選 "standard" 或 "nodered"
+            input_file (str): 輸入檔案路徑，如未指定則使用預設的 self.device_file
             
         Returns:
             dict: 綁定結果，包含成功或失敗資訊
@@ -397,7 +543,7 @@ class MeshDeviceManager:
             if device.get("uuid") == uuid:
                 found = True
                 break
-                
+        
         if not found:
             return {
                 "success": False,
@@ -454,10 +600,42 @@ class MeshDeviceManager:
         }
         
         # 清除所有現有裝置記錄，只保留新綁定的裝置
-        self.devices = [device_info]
-        
-        # 儲存到檔案
-        self._save_devices()
+        if input_format == "standard":
+            self.devices = [device_info]
+            # 儲存到檔案
+            self._save_devices()
+        elif input_format == "nodered" and input_file:
+            # 如果使用的是 Node-RED 格式，不修改原始檔案
+            logger.info(f"使用 Node-RED 格式，不會修改原始檔案 {input_file}")
+            # 可以選擇將結果匯出為 Node-RED 格式
+            if input_file != self.device_file:  # 避免覆蓋輸入檔案
+                output_file = f"bound_{os.path.basename(input_file)}"
+                nodered_data = {
+                    "gwMac": "",
+                    "gwType": "RL62M02_Provisioner",
+                    "gwPosition": "",
+                    "devices": [
+                        {
+                            "devMac": mac_address.replace(":", ""),
+                            "devName": "",
+                            "devType": device_name,
+                            "devPosition": "",
+                            "devGroup": "",
+                            "uid": actual_addr,
+                            "state": 1,
+                            "subscribe_uid": subscribe_uid,
+                            "publish_uid": publish_uid,
+                            "binding_time": time.strftime("%Y-%m-%d %H:%M:%S"),
+                            "uuid": uuid
+                        }
+                    ]
+                }
+                try:
+                    with open(output_file, 'w', encoding='utf-8') as f:
+                        json.dump(nodered_data, f, ensure_ascii=False, indent=2)
+                    logger.info(f"已匯出綁定結果到 {output_file}")
+                except Exception as e:
+                    logger.error(f"匯出綁定結果失敗: {str(e)}")
         
         # 更新 unicast 計數器
         self.current_unicast += 1
@@ -468,7 +646,8 @@ class MeshDeviceManager:
             "device": device_info
         }
     
-    def scan_and_bind(self, scan_time: float = 5.0, subscribe_uid: str = None, publish_uid: str = None):
+    def scan_and_bind(self, scan_time: float = 5.0, subscribe_uid: str = None, publish_uid: str = None,
+                        input_format: str = "standard", input_file: str = None):
         """
         掃描可用裝置，讓用戶選擇要綁定的裝置，進行綁定和設定
         
@@ -476,6 +655,8 @@ class MeshDeviceManager:
             scan_time (float): 掃描時間，單位為秒
             subscribe_uid (str): 訂閱的 UID，如果為 None 則使用預設群組地址
             publish_uid (str): 推播的 UID，如果為 None 則使用預設群組地址
+            input_format (str): 輸入檔案格式，可選 "standard" 或 "nodered"
+            input_file (str): 輸入檔案路徑，如未指定則使用預設的 self.device_file
             
         Returns:
             dict: 綁定結果
@@ -568,17 +749,59 @@ class MeshDeviceManager:
             "binding_time": time.strftime("%Y-%m-%d %H:%M:%S")
         }
         
-        # 更新裝置記錄 (添加到列表或替換現有記錄)
-        existing_device = self._find_device_by_uuid(uuid)
-        if existing_device:
-            # 移除舊記錄
-            self.devices = [d for d in self.devices if d.get("uuid") != uuid]
-        
-        # 添加新記錄
-        self.devices.append(device_info)
-        
-        # 儲存到檔案
-        self._save_devices()
+        # 根據檔案格式處理裝置記錄
+        if input_format == "standard":
+            # 更新裝置記錄 (添加到列表或替換現有記錄)
+            existing_device = self._find_device_by_uuid(uuid)
+            if existing_device:
+                # 移除舊記錄
+                self.devices = [d for d in self.devices if d.get("uuid") != uuid]
+            
+            # 添加新記錄
+            self.devices.append(device_info)
+            
+            # 儲存到檔案
+            self._save_devices()
+        elif input_format == "nodered" and input_file:
+            # 如果使用的是 Node-RED 格式，不修改原始檔案
+            logger.info(f"使用 Node-RED 格式，不會修改原始檔案 {input_file}")
+            
+            # 匯出綁定結果為 Node-RED 格式
+            if input_file != self.device_file:  # 避免覆蓋輸入檔案
+                output_file = f"bound_{os.path.basename(input_file)}"
+                
+                # 將 MAC 地址轉換為有冒號格式
+                mac_with_colon = mac_address
+                if ":" not in mac_with_colon and len(mac_with_colon) == 12:
+                    mac_parts = [mac_with_colon[i:i+2] for i in range(0, 12, 2)]
+                    mac_with_colon = ":".join(mac_parts)
+                
+                nodered_data = {
+                    "gwMac": "",
+                    "gwType": "RL62M02_Provisioner",
+                    "gwPosition": "",
+                    "devices": [
+                        {
+                            "devMac": mac_with_colon,
+                            "devName": "",
+                            "devType": device_name,
+                            "devPosition": "",
+                            "devGroup": "",
+                            "uid": actual_addr,
+                            "state": 1,
+                            "subscribe_uid": subscribe_uid,
+                            "publish_uid": publish_uid,
+                            "binding_time": time.strftime("%Y-%m-%d %H:%M:%S"),
+                            "uuid": uuid
+                        }
+                    ]
+                }
+                try:
+                    with open(output_file, 'w', encoding='utf-8') as f:
+                        json.dump(nodered_data, f, ensure_ascii=False, indent=2)
+                    logger.info(f"已匯出綁定結果到 {output_file}")
+                except Exception as e:
+                    logger.error(f"匯出綁定結果失敗: {str(e)}")
         
         # 更新 unicast 計數器
         self.current_unicast += 1
@@ -588,6 +811,70 @@ class MeshDeviceManager:
             "message": f"裝置 {device_name} 綁定成功，unicast 地址: {actual_addr}",
             "device": device_info
         }
+    
+    def export_to_nodered_format(self, output_file: str = "nodered_devices.json"):
+        """
+        將目前的裝置記錄轉為 Node-RED 格式並匯出到檔案
+        
+        Args:
+            output_file (str): 匯出的檔案名稱
+            
+        Returns:
+            dict: 匯出結果，包含成功或失敗資訊
+        """
+        if not self.devices:
+            logger.warning("沒有裝置記錄可供匯出")
+            return {"success": False, "message": "沒有裝置記錄可供匯出"}
+        
+        # 建立 Node-RED 格式的資料結構
+        nodered_data = {
+            "gwMac": "",
+            "gwType": "RL62M02_Provisioner",
+            "gwPosition": "",
+            "devices": []
+        }
+        
+        # 處理每一個裝置
+        for device in self.devices:
+            # 將 MAC 地址轉換為冒號分隔格式 (如果需要)
+            mac_address = device.get("mac_address", "00:00:00:00:00:00")
+            if ":" not in mac_address:
+                # 如果 MAC 地址格式不含冒號，轉換格式
+                # 假設格式是連續的十六進位字符，每 2 個字符為一組
+                if len(mac_address) == 12:
+                    mac_parts = [mac_address[i:i+2] for i in range(0, 12, 2)]
+                    mac_address = ":".join(mac_parts)
+            
+            # 建立 Node-RED 設備格式
+            nodered_device = {
+                "devMac": mac_address,
+                "devName": device.get("device_name", ""),
+                "devType": device.get("device_name", "Unknown"),
+                "devPosition": "",
+                "devGroup": "",
+                "uid": device.get("unicast_addr", ""),
+                "state": 1,
+                # 添加額外資訊
+                "subscribe_uid": device.get("subscribe_uid", self.DEFAULT_GROUP_ADDR),
+                "publish_uid": device.get("publish_uid", self.DEFAULT_GROUP_ADDR),
+                "binding_time": device.get("binding_time", ""),
+                "uuid": device.get("uuid", "")
+            }
+            
+            nodered_data["devices"].append(nodered_device)
+        
+        # 儲存到檔案
+        try:
+            with open(output_file, 'w', encoding='utf-8') as f:
+                json.dump(nodered_data, f, ensure_ascii=False, indent=2)
+            logger.info(f"成功匯出 {len(nodered_data['devices'])} 個裝置記錄到 {output_file}")
+            return {
+                "success": True,
+                "message": f"成功匯出 {len(nodered_data['devices'])} 個裝置到 {output_file}"
+            }
+        except Exception as e:
+            logger.error(f"匯出 Node-RED 格式檔案失敗: {str(e)}")
+            return {"success": False, "message": f"匯出失敗: {str(e)}"}
     
     def close(self):
         """關閉連接"""
@@ -619,12 +906,20 @@ def main():
     # 解除綁定所有裝置
     unbind_parser = subparsers.add_parser('unbind-all', help='解除所有裝置的綁定')
     unbind_parser.add_argument('--clear-json', action='store_true', help='同時清空 JSON 裝置記錄檔（預設不清空）')
+    unbind_parser.add_argument('--format', choices=['standard', 'nodered'], default='standard', help='輸入檔案格式，可為 standard 或 nodered')
+    unbind_parser.add_argument('--input', help='輸入檔案路徑，如未指定則使用預設裝置記錄檔')
     
     # 自動綁定
-    subparsers.add_parser('auto-bind', help='從 JSON 記錄檔自動綁定裝置')
+    auto_bind_parser = subparsers.add_parser('auto-bind', help='從 JSON 記錄檔自動綁定裝置')
+    auto_bind_parser.add_argument('--format', choices=['standard', 'nodered'], default='standard', 
+                                 help='輸入檔案格式，可為 standard 或 nodered')
+    auto_bind_parser.add_argument('--input', help='輸入檔案路徑，如未指定則使用預設裝置記錄檔')
     
     # 列出已綁定的裝置
-    subparsers.add_parser('list', help='列出記錄檔中的裝置')
+    list_parser = subparsers.add_parser('list', help='列出記錄檔中的裝置')
+    list_parser.add_argument('--format', choices=['standard', 'nodered'], default='standard', 
+                           help='輸入檔案格式，可為 standard 或 nodered')
+    list_parser.add_argument('--input', help='輸入檔案路徑，如未指定則使用預設裝置記錄檔')
     
     # 新增：先解除所有裝置綁定，然後綁定單一裝置
     reset_bind_parser = subparsers.add_parser('reset-and-bind', help='先解除所有裝置綁定，然後綁定單一裝置')
@@ -632,12 +927,20 @@ def main():
     reset_bind_parser.add_argument('--name', required=True, help='裝置名稱')
     reset_bind_parser.add_argument('--subscribe', help='訂閱地址 (預設 0xC000)')
     reset_bind_parser.add_argument('--publish', help='推播地址 (預設 0xC000)')
+    reset_bind_parser.add_argument('--format', choices=['standard', 'nodered'], default='standard', help='輸入檔案格式，可為 standard 或 nodered')
+    reset_bind_parser.add_argument('--input', help='輸入檔案路徑，如未指定則使用預設裝置記錄檔')
     
     # 新增：互動式掃描並綁定裝置
     scan_bind_parser = subparsers.add_parser('scan-and-bind', help='掃描可用裝置並進行綁定和設定')
     scan_bind_parser.add_argument('--time', type=float, default=5.0, help='掃描時間，單位為秒')
     scan_bind_parser.add_argument('--subscribe', help='訂閱地址 (預設 0xC000)')
     scan_bind_parser.add_argument('--publish', help='推播地址 (預設 0xC000)')
+    scan_bind_parser.add_argument('--format', choices=['standard', 'nodered'], default='standard', help='輸入檔案格式，可為 standard 或 nodered')
+    scan_bind_parser.add_argument('--input', help='輸入檔案路徑，如未指定則使用預設裝置記錄檔')
+    
+    # 新增：導出設備記錄為 Node-RED 格式
+    export_parser = subparsers.add_parser('export-nodered', help='將裝置記錄導出為 Node-RED 格式')
+    export_parser.add_argument('--output', default='nodered_devices.json', help='輸出檔案名稱')
     
     args = parser.parse_args()
     
@@ -668,7 +971,7 @@ def main():
             
         elif args.command == 'unbind-all':
             # 解除所有裝置的綁定
-            result = manager.unprovision_all_devices()
+            result = manager.unprovision_all_devices(input_format=args.format, input_file=args.input)
             print(f"解綁結果: {result.get('message')}")
             # 新增：根據參數決定是否清空 JSON 檔案
             if getattr(args, 'clear_json', False):
@@ -678,20 +981,48 @@ def main():
             
         elif args.command == 'auto-bind':
             # 自動綁定裝置
-            result = manager.auto_provision_from_json()
+            result = manager.auto_provision_from_json(
+                input_format=args.format,
+                input_file=args.input
+            )
             print(f"自動綁定結果: {result.get('message')}")
             
         elif args.command == 'list':
             # 列出已綁定的裝置
-            if not manager.devices:
+            devices_to_list = []
+            
+            if args.format == "nodered" and args.input:
+                # 從 Node-RED 格式檔案載入裝置
+                print(f"從 Node-RED 格式檔案 {args.input} 載入裝置資訊")
+                devices_to_list = manager._load_devices_from_nodered(args.input)
+            else:
+                # 使用標準格式
+                devices_to_list = manager.devices
+            
+            if not devices_to_list:
                 print("記錄檔中沒有裝置")
             else:
-                print(f"已記錄 {len(manager.devices)} 個裝置:")
-                for i, device in enumerate(manager.devices):
+                print(f"已記錄 {len(devices_to_list)} 個裝置:")
+                for i, device in enumerate(devices_to_list):
                     print(f"{i+1}. {device.get('device_name', '未命名')}")
-                    print(f"   UUID: {device.get('uuid', '未知')}")
-                    print(f"   MAC地址: {device.get('mac_address', '未知')}")
-                    print(f"   Unicast地址: {device.get('unicast_addr', '未知')}")
+                    
+                    # 根據檔案格式決定顯示的資訊
+                    if args.format == "nodered" and args.input:
+                        # Node-RED 格式可能有不同的欄位名稱
+                        mac_with_colon = device.get('mac_address', '')
+                        if mac_with_colon and ":" not in mac_with_colon and len(mac_with_colon) == 12:
+                            # 將無冒號的 MAC 地址轉為有冒號的格式顯示
+                            mac_parts = [mac_with_colon[i:i+2] for i in range(0, 12, 2)]
+                            mac_with_colon = ":".join(mac_parts)
+                            
+                        print(f"   MAC地址: {mac_with_colon}")
+                        print(f"   Unicast地址: {device.get('unicast_addr', '未知')}")
+                    else:
+                        # 標準格式的顯示方式
+                        print(f"   UUID: {device.get('uuid', '未知')}")
+                        print(f"   MAC地址: {device.get('mac_address', '未知')}")
+                        print(f"   Unicast地址: {device.get('unicast_addr', '未知')}")
+                    
                     print(f"   訂閱地址: {device.get('subscribe_uid', '未知')}")
                     print(f"   推播地址: {device.get('publish_uid', '未知')}")
                     print(f"   綁定時間: {device.get('binding_time', '未記錄')}")
@@ -703,7 +1034,9 @@ def main():
                 args.uuid,
                 args.name,
                 args.subscribe,
-                args.publish
+                args.publish,
+                input_format=args.format,
+                input_file=args.input
             )
             if result.get("success"):
                 print(f"重置與綁定成功: {result.get('message')}")
@@ -715,13 +1048,20 @@ def main():
             result = manager.scan_and_bind(
                 scan_time=args.time,
                 subscribe_uid=args.subscribe,
-                publish_uid=args.publish
+                publish_uid=args.publish,
+                input_format=args.format,
+                input_file=args.input
             )
             if result.get("success"):
                 print(f"掃描與綁定成功: {result.get('message')}")
             else:
                 print(f"掃描與綁定失敗: {result.get('message')}")
 
+        elif args.command == 'export-nodered':
+            # 導出設備記錄為 Node-RED 格式
+            result = manager.export_to_nodered_format(args.output)
+            print(result.get("message"))
+            
         else:
             print("請指定操作命令，使用 --help 查看幫助")
             

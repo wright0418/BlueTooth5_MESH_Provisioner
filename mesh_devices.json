@@ -1,20 +1,11 @@
 {
   "devices": [
     {
-      "uuid": "123E4567E89B12D3A45670100010010D",
-      "mac_address": "70100010010D",
-      "unicast_addr": "0x0100",
-      "name": "Device_010D",
-      "type": "未指定",
-      "group": null,
-      "linked_devices": []
-    },
-    {
       "uuid": "123E4567E89B12D3A45678570000201F",
-      "mac_address": "65570000201F",
-      "unicast_addr": "0x0101",
-      "name": "Device_201F",
-      "type": "未指定",
+      "mac_address": "",
+      "unicast_addr": "0x0100",
+      "name": "Device-0x0100",
+      "type": "RGB_LED",
       "group": null,
       "linked_devices": []
     }

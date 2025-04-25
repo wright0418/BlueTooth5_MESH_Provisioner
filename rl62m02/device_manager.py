@@ -83,7 +83,7 @@ class MeshDeviceManager:
         devices = self.devices_data.get("devices", [])
         for device in devices:
             try:
-                uid = device.get('uid', '').replace('0x', '')  # 去掉前綴，符合控制器期望格式
+                uid = device.get('uid', '')
                 name = device.get('devType') or device.get('devName') or '未命名'  # devType 存放名稱，devName 存放類型
                 device_type_str = device.get('devName') or 'RGB_LED'  # devName 存放類型
                 
@@ -236,7 +236,7 @@ class MeshDeviceManager:
                 
                 # 註冊到控制器
                 controller_type = self._get_controller_device_type(device_type)
-                self.controller.register_device(unicast_addr.replace('0x', ''), controller_type, device_name)
+                self.controller.register_device(unicast_addr, controller_type, device_name)
                 
                 # 將設備添加到 JSON 數據中
                 # 注意這裡 devName 存放類型，devType 存放名稱
@@ -324,7 +324,7 @@ class MeshDeviceManager:
             self.logger.info(f"設備名稱已從 {old_name} 更新為 {new_name}")
             
             # 同時更新控制器中的設備名稱
-            uid = device.get('uid', '').replace('0x', '')
+            uid = device.get('uid', '')
             if uid in self.controller.get_registered_devices():
                 device_info = self.controller.get_registered_devices()[uid]
                 device_info['name'] = new_name
@@ -507,7 +507,7 @@ class MeshDeviceManager:
                 self.save_device_data()
                 
                 # 從控制器中移除註冊
-                uid_without_prefix = uid.replace('0x', '')
+                uid_without_prefix = uid
                 if uid_without_prefix in self.controller.get_registered_devices():
                     del self.controller.get_registered_devices()[uid_without_prefix]
                 
@@ -547,7 +547,7 @@ class MeshDeviceManager:
                 self.logger.error(f"未找到設備 ID: {device_id}")
                 return {"result": "failed", "error": "未找到設備"}
             
-            unicast_addr = device.get('uid', '').replace('0x', '')  # 移除 0x 前綴
+            unicast_addr = device.get('uid', '')
             device_type = device.get('devName') or 'RGB_LED'  # 從 devName 讀取類型
             
             # 根據設備類型和動作執行不同操作
@@ -568,11 +568,20 @@ class MeshDeviceManager:
                     self.save_device_data()
                     
                     return {"result": "success", "message": result}
+                
+                elif action == "turn_on":
+                    # 開啟燈光 (使用預設值，如暖光)
+                    cold = params.get('cold', 0)
+                    warm = params.get('warm', 255)  # 默認使用暖光
+                    result = self.controller.control_rgb_led(unicast_addr, cold, warm, 0, 0, 0)
+                    device['state'] = 1  # 開啟
+                    self.save_device_data()
+                    return {"result": "success", "message": result}
                     
                 elif action == "set_white":
                     # 設為白光
                     cold = params.get('cold', 255)
-                    warm = params.get('warm', 255)
+                    warm = params.get('warm', )
                     result = self.controller.control_rgb_led(unicast_addr, cold, warm, 0, 0, 0)
                     device['state'] = 1  # 開啟
                     self.save_device_data()

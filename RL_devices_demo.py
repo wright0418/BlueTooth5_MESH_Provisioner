@@ -85,7 +85,7 @@ def main():
         import traceback
         traceback.print_exc() # 打印詳細的錯誤追蹤
     finally:
-        if ser and ser.is_open: # 檢查 ser 是否已成功初始化且開啟
+        if ser and hasattr(ser, 'ser') and ser.ser.is_open: # 檢查 ser 是否已成功初始化且開啟
             print("關閉序列埠...")
             ser.close()
 
@@ -447,7 +447,7 @@ def control_device_menu(controller: RLMeshDeviceController, device_manager):
     registered_devices = controller.get_registered_devices()
     if not registered_devices:
         print("控制器中沒有已註冊的設備可供控制。")
-        print("請先綁定設備並確保它們已在啟動時或透過 '設定裝置類型' 註冊。")
+        print("請先綁定設備並確保它們已在啟動時或手動移除。")
         return
 
     print("\n可控制的設備 (來自控制器):")

@@ -29,7 +29,19 @@ def main():
     try:
         # 初始化 RL62M02 系統
         print(f"初始化 RL62M02 在埠 {com_port}...")
-        serial_at, provisioner, _ = rl62m02.create_provisioner(com_port)
+        try:
+            serial_at, provisioner, _ = rl62m02.create_provisioner(com_port)
+            print("RL62M02 初始化成功")
+        except ValueError as role_err:
+            # 處理角色檢查失敗的情況
+            print(f"錯誤: Provisioner 初始化失敗 - {role_err}")
+            print("請確認設備已正確配置為 PROVISIONER 角色")
+            return
+        except Exception as init_err:
+            # 處理其他初始化錯誤
+            print(f"錯誤: 設備初始化失敗 - {init_err}")
+            print("請檢查設備連接狀態和 COM 埠配置")
+            return
         
         # 建立裝置管理器，使用 new1_device.json 作為設備資料存檔
         device_manager = MeshDeviceManager(

@@ -10,14 +10,14 @@
 2. **Provisioner** - Mesh 網路配置器，處理設備配網、綁定與資料傳輸
 3. **RLMeshDeviceController** - 設備控制層，提供對不同類型設備的高階控制功能
 4. **ModbusRTU** - 提供 Modbus RTU 協議封包的生成和解析功能
-5. **DeviceManager** - 設備管理層，提供設備資訊記錄、群組管理和連動關係管理
+5. **MeshDeviceManager** - 設備管理層，提供設備資訊記錄、群組管理和連動關係管理
 
 ### 系統架構圖
 
 ```
-+--------------------------------------------------+    +----------------+
-| RLMeshDeviceController                           |<-->| DeviceManager  |
-|                                                  |    +----------------+
++--------------------------------------------------+    +--------------------+
+| RLMeshDeviceController                           |<-->| MeshDeviceManager  |
+|                                                  |    +--------------------+
 | - RGB LED 控制                                   |            |
 | - 插座控制                                       |            v
 | - Smart-Box RTU 控制                             |    +----------------+
@@ -114,29 +114,6 @@ pip install -e .
 pip install rl62m02-0.1.0.tar.gz
 ```
 
-### 4.2 使用 RL_devices_demo.py 互動式設備管理工具
-
-推薦使用專為本專案提供的 `RL_devices_demo.py` 腳本來掃描、綁定、管理與控制設備，免去手動撰寫程式碼。
-
-```bash
-python RL_devices_demo.py <COM 埠>
-```
-
-啟動後，會顯示以下功能選單：
-
-1. 掃描並綁定新設備
-2. 顯示所有已綁定設備
-3. 設定設備名稱
-4. 設定訂閱
-5. 設定推播
-6. 測試控制設備
-7. 解除綁定設備
-0. 離開
-
-- 選單操作時依提示輸入對應編號及參數
-- 操作日誌同時輸出到終端與 `mesh_device.log` 檔案
-- 設備清單與設定儲存在 `new1_device.json`
-
 ### 4.3 使用 mesh_device_manager_demo.py 進階設備管理工具
 
 `mesh_device_manager_demo.py` 是一個基於 `MeshDeviceManager` 類別的全功能設備管理示範程式，提供更完整的設備管理與控制功能。
@@ -203,18 +180,23 @@ import logging
 
 logging.basicConfig(level=logging.INFO)
 logging.getLogger('rl62m02').setLevel(logging.DEBUG)
-# create_provisioner 僅回傳 (serial_at, provisioner, _)，不再直接管理 DeviceManager
+# create_provisioner 返回 (serial_at, provisioner, None)
+# 第三個參數為 None，是為了向後兼容性
 serial_at, provisioner, _ = create_provisioner("COM3", 115200)
+
+# 如果需要使用設備管理器，需要手動創建
+from rl62m02 import MeshDeviceManager
+device_manager = MeshDeviceManager(provisioner, device_json_path="mesh_devices.json")
 
 # 建立控制器
 controller = RLMeshDeviceController(provisioner)
 
 # 示例：掃描設備
-devices = provisioner.scan_devices(scan_time=5)
+devices = provisioner.scan_nodes(True, scan_time=5)  # 使用 scan_nodes 而非 scan_devices
 print([d['uuid'] for d in devices])
 
 # 示例：綁定設備
-res = provisioner.provision_device(devices[0]['uuid'])
+res = provisioner.auto_provision_node(devices[0]['uuid'])  # 使用 auto_provision_node
 print(res)
 
 # 示例：訂閱與推播
@@ -243,34 +225,54 @@ print(devices)
 
 ### 5.2 設備管理器
 
-系統提供完整的設備管理功能，透過 DeviceManager 類實現：
+系統提供完整的設備管理功能，透過 MeshDeviceManager 類實現：
 
 ```python
 # 創建設備管理器實例，使用JSON檔案保存設備資訊
-# 如果使用 create_provisioner，會自動創建 device_manager
-# 否則可以手動創建
-from rl62m02 import DeviceManager
-device_manager = DeviceManager("mesh_devices.json")
+from rl62m02 import MeshDeviceManager
 
-# 添加設備
-device_manager.add_device("uuid-001", "AA:BB:CC:DD:EE:01", "0x0001", "客廳燈")
+# 如果已經有 provisioner 實例，可以直接傳入
+device_manager = MeshDeviceManager(provisioner, device_json_path="mesh_devices.json")
 
-# 創建群組
-device_manager.create_group("客廳群組")
+# 使用設備管理器掃描設備
+scan_result = device_manager.scan_devices(scan_time=5.0)
+for device in scan_result:
+    print(f"UUID: {device['uuid']}, MAC: {device['mac address']}")
 
-# 將設備添加到群組
-device_manager.add_device_to_group("0x0001", "客廳群組")
+# 綁定設備
+result = device_manager.provision_device(
+    uuid="708c1e598538", 
+    device_name="客廳燈",
+    device_type="RGB_LED",
+    position="客廳"
+)
 
-# 建立設備連動關係 (當開關1操作時會連動控制燈1)
-device_manager.link_devices("0x0002", "0x0001")  # 開關地址, 燈地址
+# 設定訂閱
+device_manager.set_subscription("0x0001", "0xC000")
 
-# 解除設備連動關係
-device_manager.unlink_devices("0x0002", "0x0001")
+# 設定推播
+device_manager.set_publication("0x0001", "0xC001")
 
-# 獲取設備資訊
-info = device_manager.get_device_info()
-print(f"設備數量: {info['device_count']}")
-print(f"群組數量: {info['group_count']}")
+# 設定設備名稱
+device_manager.set_device_name("0x0001", "新的設備名稱")
+
+# 控制 RGB LED 設備
+device_manager.control_device("0x0001", "set_rgb", cold=0, warm=0, red=255, green=0, blue=0)
+
+# 控制插座設備
+device_manager.control_device("0x0002", "turn_on")  # 開啟
+device_manager.control_device("0x0002", "turn_off")  # 關閉
+device_manager.control_device("0x0002", "toggle")    # 切換狀態
+
+# 獲取所有設備
+devices = device_manager.get_all_devices()
+print(f"設備數量: {len(devices)}")
+
+# 格式化顯示所有設備
+print(device_manager.display_devices())
+
+# 解除綁定設備
+device_manager.unbind_device("0x0001")
 ```
 
 ## 6. 錯誤處理
@@ -347,16 +349,20 @@ except KeyboardInterrupt:
 ```python
 from rl62m02 import create_provisioner, scan_devices, provision_device
 from rl62m02.controllers.mesh_controller import RLMeshDeviceController
+from rl62m02 import MeshDeviceManager
 import time
 
 def main():
     # 1. 初始化通訊和配置
     print("初始化設備...")
-    serial_at, provisioner, device_manager = create_provisioner("COM3", 115200)
+    serial_at, provisioner, _ = create_provisioner("COM3", 115200)
+    
+    # 創建設備管理器
+    device_manager = MeshDeviceManager(provisioner, device_json_path="mesh_devices.json")
     
     # 2. 掃描設備
     print("掃描設備中...")
-    devices = scan_devices(provisioner, scan_time=5.0)
+    devices = provisioner.scan_nodes(True, scan_time=5.0)
     print(f"發現 {len(devices)} 個設備:")
     for i, device in enumerate(devices):
         print(f"{i+1}. UUID: {device['uuid']}, MAC地址: {device['mac address']}")
@@ -369,12 +375,11 @@ def main():
     target_device = devices[0]  # 選擇第一個設備
     print(f"開始配置設備 {target_device['uuid']}...")
     
-    result = provision_device(
-        provisioner, 
+    result = device_manager.provision_device(
         target_device['uuid'], 
-        device_manager=device_manager,
         device_name="測試設備",
-        device_type="RGB_LED"  # 假設是RGB LED設備
+        device_type="RGB_LED",  # 假設是RGB LED設備
+        position="客廳"
     )
     
     if result.get('result') != 'success':
@@ -387,28 +392,29 @@ def main():
     # 4. 控制設備
     print("初始化設備控制器...")
     device_controller = RLMeshDeviceController(provisioner)
-    device_controller.register_device(unicast_addr, "RGB_LED", "測試燈")
+    
+    # 不需要手動註冊設備，因為 device_manager 已經在綁定時註冊了
     
     print("開始控制設備...")
     
     # 設置為紅色
     print("設置為紅色...")
-    device_controller.control_rgb_led(unicast_addr, 0, 0, 255, 0, 0)
+    device_manager.control_device(unicast_addr, "set_rgb", cold=0, warm=0, red=255, green=0, blue=0)
     time.sleep(2)
     
     # 設置為綠色
     print("設置為綠色...")
-    device_controller.control_rgb_led(unicast_addr, 0, 0, 0, 255, 0)
+    device_manager.control_device(unicast_addr, "set_rgb", cold=0, warm=0, red=0, green=255, blue=0)
     time.sleep(2)
     
     # 設置為藍色
     print("設置為藍色...")
-    device_controller.control_rgb_led(unicast_addr, 0, 0, 0, 0, 255)
+    device_manager.control_device(unicast_addr, "set_rgb", cold=0, warm=0, red=0, green=0, blue=255)
     time.sleep(2)
     
     # 設置為白色
     print("設置為白色...")
-    device_controller.control_rgb_led(unicast_addr, 255, 255, 0, 0, 0)
+    device_manager.control_device(unicast_addr, "set_rgb", cold=255, warm=255, red=0, green=0, blue=0)
     
     print("設備控制演示完成")
 
@@ -418,26 +424,30 @@ if __name__ == "__main__":
 
 ## 11. 設備資料結構
 
-DeviceManager 使用的 JSON 檔案結構如下：
+MeshDeviceManager 使用的 JSON 檔案結構如下：
 
 ```json
 {
+  "gwMac": "",
+  "gwType": "mini_PC",
+  "gwPosition": "主機位置",
   "devices": [
     {
-      "uuid": "uuid-001",
-      "mac_address": "AA:BB:CC:DD:EE:01", 
-      "unicast_addr": "0x0001",
-      "name": "燈光設備-1",
-      "group": "燈光群組",
-      "linked_devices": ["0x0003"]
+      "devMac": "AA:BB:CC:DD:EE:01",
+      "devName": "RGB_LED",  // 存放設備類型
+      "devType": "客廳燈",   // 存放設備名稱
+      "devPosition": "客廳",
+      "devGroup": "",
+      "uid": "0x0001",      // 設備的 unicast 地址
+      "state": 1,           // 1=開啟, 0=關閉
+      "subscribe": ["0xC000"], // 訂閱的群組地址列表
+      "publish": "0xC001"   // 推播的目標地址
     }
-  ],
-  "groups": {
-    "燈光群組": ["0x0001", "0x0002"],
-    "開關群組": ["0x0003", "0x0004"]
-  }
+  ]
 }
 ```
+
+> 注意：為了歷史兼容性原因，在資料結構中 `devName` 實際上存放的是設備類型，而 `devType` 存放的是設備名稱，這與欄位名稱的直覺意義相反。
 
 ## 12. 命令行工具
 

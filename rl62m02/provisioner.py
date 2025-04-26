@@ -25,6 +25,9 @@ class Provisioner:
         
         Args:
             serial_at (SerialAT): SerialAT 實例，用於與設備通訊
+            
+        Raises:
+            ValueError: 當設備角色不是 PROVISIONER 或無法取得角色資訊時拋出
         """
         self.serial_at = serial_at
         self.last_response = None
@@ -51,6 +54,13 @@ class Provisioner:
             'AT+NR': 'NR-MSG'
         }
         self._last_command_id = None  # 最後發送命令的ID
+        
+        # 檢查設備角色是否為 PROVISIONER
+        role_resp = self._send_and_wait('AT+MRG', expected_prefix='MRG-MSG')
+        if not role_resp:
+            raise ValueError("無法取得設備角色資訊，請檢查設備連線狀態")
+        if 'PROVISIONER' not in role_resp:
+            raise ValueError(f"設備角色錯誤: {role_resp}，必須為 PROVISIONER 角色才能使用此類")
 
     def _on_receive(self, line: str):
         """接收消息的回調函數，添加鎖保護並支援命令ID匹配"""
@@ -224,7 +234,7 @@ class Provisioner:
         """
         self.responses.clear()
         self.serial_at.send('AT+NL')
-        time.sleep(1)
+        time.sleep(3)
         return [r for r in self.responses if r.startswith('NL-MSG')]
 
     def set_appkey(self, dst: str, app_key_index: int, net_key_index: int):

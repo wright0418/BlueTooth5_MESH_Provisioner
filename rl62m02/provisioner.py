@@ -3,6 +3,7 @@ import time
 import logging
 import uuid as uuid_module
 from .serial_at import SerialAT
+from .utils import format_mac_address # Import from utils
 
 class Provisioner:
     """
@@ -19,17 +20,19 @@ class Provisioner:
     APP_KEY_IDX = 0
     NET_KEY_IDX = 0
     
-    def __init__(self, serial_at: SerialAT):
+    def __init__(self, serial_at: SerialAT, command_delay: float = 0.01):
         """
         初始化 Provisioner 實例
         
         Args:
             serial_at (SerialAT): SerialAT 實例，用於與設備通訊
+            command_delay (float): 發送每個 AT 命令前的延遲時間 (秒)，預設為 0.0
             
         Raises:
             ValueError: 當設備角色不是 PROVISIONER 或無法取得角色資訊時拋出
         """
         self.serial_at = serial_at
+        self._command_delay = command_delay
         self.last_response = None
         self.responses = []
         self._resp_lock = threading.Lock()  # 添加鎖保護共享資源
@@ -91,6 +94,9 @@ class Provisioner:
         Returns:
             str: 響應消息，如果超時則返回 None
         """
+        # 增加命令發送前的延遲
+        time.sleep(self._command_delay)
+
         if timeout is None:
             timeout = self.DEFAULT_TIMEOUT
             
@@ -206,7 +212,7 @@ class Provisioner:
                 if len(parts) == 4:
                     mac = parts[1]
                     uuid = parts[3]
-                    mac_uuid_dict[uuid] = mac  # 以 uuid 當 key 去重複
+                    mac_uuid_dict[uuid] = format_mac_address(mac)  # 以 uuid 當 key 去重複
         return [{"mac address": mac, "uuid": uuid} for uuid, mac in mac_uuid_dict.items()]
 
     def provision(self, dev_uuid: str):
@@ -275,6 +281,29 @@ class Provisioner:
                 resp = nr_responses[-1]  # 取最後一個匹配的響應
         
         return resp
+
+    def reset_mesh(self):
+        """
+        重置整個 Mesh 網路 (發送 AT+NR 命令並等待重啟完成)
+
+        Returns:
+            list[str]: 接收到的相關響應消息列表 (包含 NR-MSG 和 SYS-MSG)
+        """
+        # 清除之前的響應緩存
+        self.responses.clear()
+        # 發送 AT+NR 命令
+        self.serial_at.send('AT+NR')
+        # 等待一段時間，讓設備重啟並發送消息
+        # 注意: NR_TIMEOUT 可能不足以等待設備完全重啟並發送 SYS-MSG
+        # 如果需要更長的等待時間，可能需要調整 NR_TIMEOUT 或使用獨立的等待時間
+        time.sleep(self.NR_TIMEOUT + 2.0) # 增加等待時間以捕捉重啟訊息
+
+        # 過濾並返回相關的響應
+        relevant_responses = [
+            r for r in self.responses
+            if r.startswith('NR-MSG') or r.startswith('SYS-MSG')
+        ]
+        return relevant_responses
 
     def auto_provision_node(self, uuid: str):
         """
@@ -391,6 +420,27 @@ class Provisioner:
         """
         resp = self._send_and_wait(f'AT+MDTG {unicast_addr} {element_index} {app_key_idx} {read_data_len}', timeout=3.0, expected_prefix='MDTG-MSG')
         return resp
+
+    def get_self_mac_address(self):
+        """
+        查詢 Provisioner 自身的 MAC 地址
+        
+        Returns:
+            str: 格式化後的 MAC 地址 (AA:BB:CC:DD:EE:FF)，如果查詢失敗則返回 None
+        """
+        # 註冊 AT+ADDR 命令的前綴
+        if 'AT+ADDR' not in self._command_prefixes:
+            self._command_prefixes['AT+ADDR'] = 'ADDR-MSG'
+            
+        resp = self._send_and_wait('AT+ADDR', expected_prefix='ADDR-MSG')
+        if resp and resp.startswith('ADDR-MSG '):
+            parts = resp.split()
+            if len(parts) == 2:
+                raw_mac = parts[1]
+                # 使用 utils 中的函數格式化 MAC 地址
+                return format_mac_address(raw_mac)
+        logging.error(f"查詢自身 MAC 地址失敗: {resp}")
+        return None
 
     def observe(self, print_all: bool = True):
         """

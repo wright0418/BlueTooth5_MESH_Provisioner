@@ -42,6 +42,7 @@ class SerialAT:
         if not cmd.endswith('\r\n'):
             cmd += '\r\n'
         self.ser.write(cmd.encode('utf-8'))
+        logging.debug(f"UART Send: {cmd.strip()}")
         self.ser.flush()
 
     def _recv_loop(self):

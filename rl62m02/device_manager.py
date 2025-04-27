@@ -13,7 +13,7 @@ import traceback
 
 from .provisioner import Provisioner
 from .controllers.mesh_controller import RLMeshDeviceController
-
+from .utils import format_mac_address
 
 class MeshDeviceManager:
     """Mesh 設備管理器，整合設備資訊管理、操作等功能"""
@@ -103,19 +103,7 @@ class MeshDeviceManager:
             except Exception as e:
                 self.logger.error(f"註冊設備到控制器時發生錯誤: {e}")
     
-    def format_mac_address(self, mac_address: str) -> str:
-        """將 MAC 地址格式化為冒號分隔的形式"""
-        # 移除所有冒號，以防萬一有冒號的情況
-        mac_without_colon = mac_address.replace(":", "")
-        
-        # 確保有足夠的字符（12個十六進位數字）
-        if len(mac_without_colon) != 12:
-            return mac_address  # 如果格式不正確，返回原始值
-            
-        # 每兩個字符插入一個冒號
-        mac_parts = [mac_without_colon[i:i+2] for i in range(0, 12, 2)]
-        return ":".join(mac_parts).upper()
-    
+   
     def get_all_devices(self) -> List[Dict[str, Any]]:
         """獲取所有設備列表"""
         return self.devices_data.get("devices", [])
@@ -163,7 +151,7 @@ class MeshDeviceManager:
             設備信息字典或 None（如果未找到）
         """
         # 標準化 MAC 地址格式
-        mac = self.format_mac_address(mac)
+        mac = format_mac_address(mac)
         
         devices = self.devices_data.get("devices", [])
         for device in devices:
@@ -171,35 +159,8 @@ class MeshDeviceManager:
                 return device
         return None
     
-    def scan_devices(self, scan_time: float = 5.0) -> List[Dict[str, str]]:
-        """掃描附近的網狀網路設備
-        
-        Args:
-            scan_time: 掃描時間（秒）
-        
-        Returns:
-            設備列表，每個設備包含 uuid 和 mac address
-        """
-        self.logger.info("開始掃描網狀網路裝置...")
-        
-        # 使用 Provisioner 的掃描函數
-        try:
-            # 修正：使用 scan_nodes 而不是 scan_devices
-            scan_result = self.provisioner.scan_nodes(True, scan_time=scan_time)
-            self.logger.info(f"掃描完成，發現 {len(scan_result)} 個設備")
-            
-            # 格式化 MAC 地址
-            for device in scan_result:
-                if 'mac address' in device:
-                    device['mac address'] = self.format_mac_address(device['mac address'])
-                    
-            return scan_result
-        except Exception as e:
-            self.logger.error(f"掃描設備時發生錯誤: {e}")
-            return []
-    
     def provision_device(self, uuid: str, device_name: str = "", device_type: str = "RGB_LED", 
-                         position: str = "") -> Dict[str, Any]:
+                         position: str = "", mac_address: Optional[str] = None) -> Dict[str, Any]: # Added mac_address parameter
         """綁定設備到網路
         
         Args:
@@ -207,6 +168,7 @@ class MeshDeviceManager:
             device_name: 設備名稱
             device_type: 設備類型，如 'RGB_LED', 'PLUG' 等
             position: 設備位置
+            mac_address: 設備的 MAC 地址 (可選)
             
         Returns:
             包含操作結果和信息的字典
@@ -217,22 +179,17 @@ class MeshDeviceManager:
             # 使用 provisioner 進行綁定
             result = self.provisioner.auto_provision_node(uuid)
             
-            if result and 'unicast_addr' in result:
+            # 修改這裡的判斷條件
+            if result and result.get('result') == 'success' and 'unicast_addr' in result:
                 unicast_addr = result['unicast_addr']
                 self.logger.info(f"綁定成功! 設備地址: {unicast_addr}")
-                
-                # 從掃描結果中查詢 MAC 地址
-                mac_address = ""
-                # 修正：使用 scan_nodes 而不是 scan_devices
-                scan_result = self.provisioner.scan_nodes(True, scan_time=1)
-                for device in scan_result:
-                    if device.get('uuid') == uuid:
-                        mac_address = self.format_mac_address(device.get('mac address', ''))
-                        break
+
+                # 使用傳入的 MAC 地址，如果有的話，並格式化
+                formatted_mac = format_mac_address(mac_address) if mac_address else ""
                 
                 # 如果未提供名稱，使用默認格式
                 if not device_name:
-                    device_name = f"Device_{mac_address[-5:].replace(':', '')}" if mac_address else f"Device_{uuid[-6:]}"
+                    device_name = f"Device_{formatted_mac[-5:].replace(':', '')}" if formatted_mac else f"Device_{uuid[-6:]}"
                 
                 # 註冊到控制器
                 controller_type = self._get_controller_device_type(device_type)
@@ -241,7 +198,7 @@ class MeshDeviceManager:
                 # 將設備添加到 JSON 數據中
                 # 注意這裡 devName 存放類型，devType 存放名稱
                 new_device = {
-                    "devMac": mac_address,
+                    "devMac": formatted_mac, # Use the passed and formatted MAC
                     "devName": device_type,  # 存放類型
                     "devType": device_name,  # 存放名稱
                     "devPosition": position,
@@ -252,15 +209,29 @@ class MeshDeviceManager:
                     "publish": ""
                 }
                 
-                # 檢查是否已存在相同 MAC 的設備
-                if mac_address:
-                    existing_device = next((d for d in self.devices_data["devices"] 
-                                           if d.get("devMac") == mac_address), None)
-                    if existing_device:
+                # 檢查是否已存在相同 MAC 的設備 (如果 MAC 存在)
+                if formatted_mac:
+                    existing_device_index = -1
+                    for i, d in enumerate(self.devices_data["devices"]):
+                        if d.get("devMac") == formatted_mac:
+                            existing_device_index = i
+                            break
+                            
+                    if existing_device_index != -1:
                         # 更新現有設備
-                        self.logger.info(f"更新現有設備 MAC: {mac_address}")
-                        self.devices_data["devices"].remove(existing_device)
+                        self.logger.info(f"更新現有設備 MAC: {formatted_mac}")
+                        # 直接更新列表中的字典
+                        self.devices_data["devices"][existing_device_index].update(new_device)
+                        # 更新完成後，不需要再 append，直接儲存並返回
+                        self.save_device_data()
+                        self.logger.info(f"設備 {device_name} (MAC: {formatted_mac}) 已更新")
+                        return {
+                            "result": "success",
+                            "unicast_addr": unicast_addr,
+                            "device": self.devices_data["devices"][existing_device_index] # Return the updated device info
+                        }
                 
+                # 如果沒有找到現有設備或沒有 MAC 地址，則添加新設備
                 self.devices_data["devices"].append(new_device)
                 self.save_device_data()
                 
@@ -272,10 +243,10 @@ class MeshDeviceManager:
                     "device": new_device
                 }
             else:
-                self.logger.error(f"綁定失敗: {result}")
+                self.logger.error(f"綁定失敗: {result.get('msg', str(result))}") # 記錄更詳細的失敗原因
                 return {
                     "result": "failed",
-                    "error": str(result)
+                    "error": result.get('msg', str(result)) # 返回更詳細的失敗原因
                 }
         except Exception as e:
             self.logger.error(f"綁定過程中發生錯誤: {e}")
@@ -335,12 +306,13 @@ class MeshDeviceManager:
             self.logger.error(f"設定設備名稱時發生錯誤: {e}")
             return {"result": "error", "error": str(e)}
     
-    def set_subscription(self, device_id: Union[int, str], group_addr: str) -> Dict[str, Any]:
+    def set_subscription(self, device_id: Union[int, str], group_addr: str, save_after_set: bool = True) -> Dict[str, Any]:
         """為設備設定訂閱
         
         Args:
             device_id: 設備索引（從0開始）或 UID
             group_addr: 組地址，例如 '0xC000'
+            save_after_set: 是否在設定成功後儲存裝置資料，預設為 True
             
         Returns:
             操作結果字典
@@ -382,10 +354,13 @@ class MeshDeviceManager:
                 # 添加新的訂閱
                 device["subscribe"].append(group_addr)
                 
-                # 更新設備數據
-                self.save_device_data()
-                self.logger.info(f"已更新訂閱資訊，當前設備訂閱列表：{device['subscribe']}")
-                
+                # 只有在 save_after_set 為 True 時才儲存
+                if save_after_set:
+                    self.save_device_data()
+                    self.logger.info(f"已更新訂閱資訊並儲存，當前設備訂閱列表：{device['subscribe']}")
+                else:
+                    self.logger.info(f"已更新訂閱資訊 (未儲存)，當前設備訂閱列表：{device['subscribe']}")
+
                 return {
                     "result": "success", 
                     "message": result,
@@ -400,12 +375,13 @@ class MeshDeviceManager:
             traceback.print_exc()
             return {"result": "error", "error": str(e)}
     
-    def set_publication(self, device_id: Union[int, str], pub_addr: str) -> Dict[str, Any]:
+    def set_publication(self, device_id: Union[int, str], pub_addr: str, save_after_set: bool = True) -> Dict[str, Any]:
         """為設備設定推播
         
         Args:
             device_id: 設備索引（從0開始）或 UID
             pub_addr: 推播目標地址，例如 '0xC001'
+            save_after_set: 是否在設定成功後儲存裝置資料，預設為 True
             
         Returns:
             操作結果字典
@@ -442,9 +418,12 @@ class MeshDeviceManager:
                 # 更新推播設定
                 device["publish"] = pub_addr
                 
-                # 更新設備數據
-                self.save_device_data()
-                self.logger.info(f"已更新推播資訊，當前設備推播通道：{pub_addr}")
+                # 只有在 save_after_set 為 True 時才儲存
+                if save_after_set:
+                    self.save_device_data()
+                    self.logger.info(f"已更新推播資訊並儲存，當前設備推播通道：{pub_addr}")
+                else:
+                    self.logger.info(f"已更新推播資訊 (未儲存)，當前設備推播通道：{pub_addr}")
                 
                 return {
                     "result": "success", 
@@ -460,12 +439,13 @@ class MeshDeviceManager:
             traceback.print_exc()
             return {"result": "error", "error": str(e)}
     
-    def unbind_device(self, device_id: Union[int, str], force_remove: bool = False) -> Dict[str, Any]:
+    def unbind_device(self, device_id: Union[int, str], force_remove: bool = False, save_after_unbind: bool = True) -> Dict[str, Any]:
         """解除綁定裝置
         
         Args:
             device_id: 設備索引（從0開始）或 UID
             force_remove: 是否強制從數據文件中刪除（即使解綁失敗）
+            save_after_unbind: 是否在解除綁定成功後儲存裝置資料，預設為 True
             
         Returns:
             操作結果字典
@@ -504,7 +484,8 @@ class MeshDeviceManager:
             if success or force_remove:
                 # 從設備數據中移除
                 self.devices_data["devices"].remove(device)
-                self.save_device_data()
+                if save_after_unbind:
+                    self.save_device_data()
                 
                 # 從控制器中移除註冊
                 uid_without_prefix = uid
@@ -623,11 +604,51 @@ class MeshDeviceManager:
                     
                 else:
                     return {"result": "failed", "error": f"不支援的動作: {action}"}
-                    
+
+            elif device_type == "SMART_BOX":
+                if action == "read_rtu":
+                    slave_addr = params.get('slave_addr')
+                    function_code = params.get('function_code')
+                    start_addr = params.get('start_addr')
+                    quantity = params.get('quantity')
+                    if None in [slave_addr, function_code, start_addr, quantity]:
+                        return {"result": "failed", "error": "缺少必要的參數 (slave_addr, function_code, start_addr, quantity)"}
+                    result = self.controller.read_smart_box_rtu(unicast_addr, slave_addr, function_code, start_addr, quantity)
+                    # 注意：SmartBox 的讀寫操作通常不直接改變設備的 'state' 欄位
+                    return {"result": "success", "message": "讀取指令已發送", "data": result} # 返回讀取結果
+                elif action == "write_register":
+                    slave_addr = params.get('slave_addr')
+                    reg_addr = params.get('reg_addr')
+                    reg_value = params.get('reg_value')
+                    if None in [slave_addr, reg_addr, reg_value]:
+                        return {"result": "failed", "error": "缺少必要的參數 (slave_addr, reg_addr, reg_value)"}
+                    result = self.controller.write_smart_box_register(unicast_addr, slave_addr, reg_addr, reg_value)
+                    return {"result": "success", "message": "寫入指令已發送", "data": result} # 返回寫入結果
+                else:
+                    return {"result": "failed", "error": f"SMART_BOX 不支援的動作: {action}"}
+
+            elif device_type == "AIR_BOX":
+                if action == "read_data":
+                    slave_addr = params.get('slave_addr', 1) # 默認從站地址為 1
+                    result = self.controller.read_air_box_data(unicast_addr, slave_addr)
+                    # AirBox 讀取操作也不直接改變 'state'
+                    return {"result": "success", "message": "讀取指令已發送", "data": result} # 返回讀取結果
+                else:
+                    return {"result": "failed", "error": f"AIR_BOX 不支援的動作: {action}"}
+
+            elif device_type == "POWER_METER":
+                if action == "read_data":
+                    slave_addr = params.get('slave_addr', 1) # 默認從站地址為 1
+                    result = self.controller.read_power_meter_data(unicast_addr, slave_addr)
+                    # PowerMeter 讀取操作也不直接改變 'state'
+                    return {"result": "success", "message": "讀取指令已發送", "data": result} # 返回讀取結果
+                else:
+                    return {"result": "failed", "error": f"POWER_METER 不支援的動作: {action}"}
+
             # 可以根據需要擴展其他設備類型的控制功能
             else:
                 return {"result": "failed", "error": f"不支援的設備類型: {device_type}"}
-                
+
         except Exception as e:
             self.logger.error(f"控制設備時發生錯誤: {e}")
             traceback.print_exc()

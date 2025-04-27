@@ -26,19 +26,6 @@ def create_provisioner(com_port, baud_rate=115200):
     # 返回物件元組，為了兼容性，第三個元素保持為 None
     return (serial_at, prov, None)
 
-def scan_devices(provisioner, scan_time=5.0):
-    """
-    掃描周圍的 BLE 設備
-    
-    Args:
-        provisioner (Provisioner): Provisioner 實例
-        scan_time (float): 掃描時間，單位為秒
-        
-    Returns:
-        list: 掃描到的設備列表
-    """
-    return provisioner.scan_nodes(True, scan_time)
-
 def provision_device(provisioner, uuid):
     """
     綁定設備到 Mesh 網路
@@ -55,7 +42,6 @@ def provision_device(provisioner, uuid):
 __all__ = [
     'SerialAT',
     'Provisioner',
-    'scan_devices',
     'provision_device',
     'create_provisioner',
     'RLMeshDeviceController',

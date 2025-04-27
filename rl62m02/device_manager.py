@@ -160,7 +160,7 @@ class MeshDeviceManager:
         return None
     
     def provision_device(self, uuid: str, device_name: str = "", device_type: str = "RGB_LED", 
-                         position: str = "", mac_address: Optional[str] = None) -> Dict[str, Any]: # Added mac_address parameter
+                         position: str = "", mac_address: Optional[str] = None) -> Dict[str, Any]:
         """綁定設備到網路
         
         Args:
@@ -174,31 +174,30 @@ class MeshDeviceManager:
             包含操作結果和信息的字典
         """
         self.logger.info(f"開始綁定設備 UUID: {uuid}")
-        
+
         try:
             # 使用 provisioner 進行綁定
             result = self.provisioner.auto_provision_node(uuid)
-            
-            # 修改這裡的判斷條件
+
             if result and result.get('result') == 'success' and 'unicast_addr' in result:
                 unicast_addr = result['unicast_addr']
                 self.logger.info(f"綁定成功! 設備地址: {unicast_addr}")
 
                 # 使用傳入的 MAC 地址，如果有的話，並格式化
                 formatted_mac = format_mac_address(mac_address) if mac_address else ""
-                
+
                 # 如果未提供名稱，使用默認格式
                 if not device_name:
                     device_name = f"Device_{formatted_mac[-5:].replace(':', '')}" if formatted_mac else f"Device_{uuid[-6:]}"
-                
+
                 # 註冊到控制器
                 controller_type = self._get_controller_device_type(device_type)
                 self.controller.register_device(unicast_addr, controller_type, device_name)
-                
+
                 # 將設備添加到 JSON 數據中
                 # 注意這裡 devName 存放類型，devType 存放名稱
                 new_device = {
-                    "devMac": formatted_mac, # Use the passed and formatted MAC
+                    "devMac": formatted_mac,  # Use the passed and formatted MAC
                     "devName": device_type,  # 存放類型
                     "devType": device_name,  # 存放名稱
                     "devPosition": position,
@@ -208,7 +207,7 @@ class MeshDeviceManager:
                     "subscribe": [],
                     "publish": ""
                 }
-                
+
                 # 檢查是否已存在相同 MAC 的設備 (如果 MAC 存在)
                 if formatted_mac:
                     existing_device_index = -1
@@ -216,7 +215,7 @@ class MeshDeviceManager:
                         if d.get("devMac") == formatted_mac:
                             existing_device_index = i
                             break
-                            
+
                     if existing_device_index != -1:
                         # 更新現有設備
                         self.logger.info(f"更新現有設備 MAC: {formatted_mac}")
@@ -228,25 +227,31 @@ class MeshDeviceManager:
                         return {
                             "result": "success",
                             "unicast_addr": unicast_addr,
-                            "device": self.devices_data["devices"][existing_device_index] # Return the updated device info
+                            "device": self.devices_data["devices"][existing_device_index]  # Return the updated device info
                         }
-                
+
                 # 如果沒有找到現有設備或沒有 MAC 地址，則添加新設備
                 self.devices_data["devices"].append(new_device)
                 self.save_device_data()
-                
+
                 self.logger.info(f"設備 {device_name} 已成功綁定並添加到設備數據檔案")
-                
+
                 return {
                     "result": "success",
                     "unicast_addr": unicast_addr,
                     "device": new_device
                 }
-            else:
-                self.logger.error(f"綁定失敗: {result.get('msg', str(result))}") # 記錄更詳細的失敗原因
+            elif result is None:
+                self.logger.error("綁定失敗: Provisioner 返回 None")
                 return {
                     "result": "failed",
-                    "error": result.get('msg', str(result)) # 返回更詳細的失敗原因
+                    "error": "Provisioner 返回 None"
+                }
+            else:
+                self.logger.error(f"綁定失敗: {result.get('msg', str(result))}")
+                return {
+                    "result": "failed",
+                    "error": result.get('msg', str(result))
                 }
         except Exception as e:
             self.logger.error(f"綁定過程中發生錯誤: {e}")
